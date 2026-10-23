@@ -13,7 +13,7 @@
 <div id="loading" class="spinner-page">Loading…</div>
 <main class="wrap" id="main" hidden>
   <div class="page-head">
-    <div><h1>Duty roster</h1><p class="sub" id="updated">Updates appear here instantly when the admin changes the roster.</p></div>
+    <div><h1>Duty roster</h1><p class="sub" id="updated">Loading…</p></div>
     <div class="actions" style="align-items:center">
       <button class="btn ghost sm" id="prev" aria-label="Previous month">‹</button>
       <input type="month" id="month" style="width:auto">
@@ -38,39 +38,43 @@
   </div>
 </main>
 <script type="module">
-  import { requireUser, db, $, esc, ym, today, isWeekend, fmtTs, OFF_CODES, shiftClass, rosterId, doc, onSnapshot, APP_NAME } from '/js/app.js';
+  import { requireUser, db, $, esc, ym, today, isWeekend, fmtTs, OFF_CODES, shiftClass, shiftSpan, cellText, rosterId, doc, cachedDoc, APP_NAME } from '/js/app.js';
   document.title = `Duty Roster · ${APP_NAME}`;
   const { user, dept } = await requireUser();
   if (dept) $('h1').textContent = `Duty roster · ${dept.name}`;
 
-  let unsub = null, data = null;
+  let data = null;
   const monthInput = $('#month');
   monthInput.value = new URLSearchParams(location.search).get('m') || ym(new Date());
   const shift = n => { const [y, m] = monthInput.value.split('-').map(Number); monthInput.value = ym(new Date(y, m - 1 + n, 1)); load(); };
   $('#prev').onclick = () => shift(-1); $('#next').onclick = () => shift(1);
   monthInput.onchange = load;
   $('#search').oninput = drawGrid;
+  const hhmm = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const timeOf = c => { const sp = shiftSpan(c, data?.shifts || {}); return sp ? `${hhmm(sp.start)}–${hhmm(sp.end)}` : ''; };
 
-  function load() {
-    unsub?.();
-    unsub = onSnapshot(doc(db, 'rosters', rosterId(monthInput.value)), s => {
-      data = s.exists() ? s.data() : null;
-      $('#none').hidden = !!data; $('#content').hidden = !data;
-      $('#updated').textContent = data ? `Last updated ${fmtTs(data.updatedAt)}` : 'Updates appear here instantly when the admin changes the roster.';
-      if (data) { drawMine(); drawGrid(); }
-    });
+  // the roster is kept on this device; the ↻ button at the top fetches the latest from Firebase
+  async function load() {
+    data = await cachedDoc(doc(db, 'rosters', rosterId(monthInput.value))).catch(() => null);
+    $('#none').hidden = !!data; $('#content').hidden = !data;
+    $('#updated').textContent = data ? `Published ${fmtTs(data.updatedAt)}. Tap ↻ at the top to check for changes.` : 'Not published yet.';
+    if (data) { drawMine(); drawGrid(); }
   }
   const dateOf = i => `${monthInput.value}-${String(i + 1).padStart(2, '0')}`;
+  const isOff = c => !c || OFF_CODES.includes(c) || data?.shifts?.[c]?.off;
 
   function drawMine() {
     const row = data.rows?.[user.uid] || [];
-    const legend = data.legend || {};
+    const legend = data.legend || {}, shifts = data.shifts || {};
+    let hours = 0, worked = 0;
+    row.forEach(c => { const sp = shiftSpan(c, shifts); if (sp) { hours += sp.hours; worked++; } });
     $('#mine').innerHTML = row.length ? Array.from({ length: data.days }, (_, i) => {
       const d = dateOf(i), c = row[i] || '', dt = new Date(d + 'T00:00');
-      return `<div class="duty ${shiftClass(c)} ${d === today() ? 'today' : ''} ${!c || OFF_CODES.includes(c) ? 'off' : ''}" title="${esc(legend[c] || '')}">
-        <div class="d">${dt.toLocaleDateString(undefined, { weekday: 'short' })} ${i + 1}</div><div class="c">${esc(c || '—')}</div></div>`;
-    }).join('') : '<div class="muted">You are not on this month\'s roster.</div>';
-    $('#legend').innerHTML = Object.entries(legend).map(([k, v]) => `<span><span class="code ${shiftClass(k)}">${esc(k)}</span> ${esc(v)}</span>`).join('');
+      return `<div class="duty ${shiftClass(c, shifts)} ${d === today() ? 'today' : ''} ${isOff(c) ? 'off' : ''}" title="${esc(legend[c] || '')}">
+        <div class="d">${dt.toLocaleDateString(undefined, { weekday: 'short' })} ${i + 1}</div><div class="c">${esc(cellText(c, data.shifts) || '—')}</div><div class="t">${esc(timeOf(c) ? 'to ' + timeOf(c).split('–')[1] : '')}</div></div>`;
+    }).join('') + `<div class="duty" style="min-width:110px"><div class="d">This month</div><div class="c" style="font-size:15px">${worked} shifts</div><div class="t">${Math.round(hours * 10) / 10} hours</div></div>`
+      : '<div class="muted">You are not on this month\'s roster.</div>';
+    $('#legend').innerHTML = Object.entries(legend).map(([k, v]) => `<span><span class="code ${shiftClass(k, shifts)}">${esc(cellText(k, shifts))}</span> ${esc(v)}</span>`).join('');
     setTimeout(() => $('#mine .today')?.scrollIntoView({ inline: 'center', block: 'nearest' }), 50);
   }
 
@@ -78,7 +82,7 @@
     if (!data) return;
     const q = $('#search').value.trim().toLowerCase();
     const order = (data.order || Object.keys(data.rows || {})).filter(uid => data.rows?.[uid]);
-    const t = today();
+    const t = today(), shifts = data.shifts || {};
     let h = '<thead><tr><th class="name">Staff</th>';
     for (let i = 0; i < data.days; i++) {
       const d = dateOf(i), dt = new Date(d + 'T00:00');
@@ -89,7 +93,7 @@
       const n = data.names?.[uid] || {};
       if (q && !`${n.name} ${n.staffId}`.toLowerCase().includes(q)) continue;
       h += `<tr class="${uid === user.uid ? 'me' : ''}"><td class="name">${esc(n.name || '—')}<div class="small muted">${esc(n.staffId || '')}</div></td>`;
-      for (let i = 0; i < data.days; i++) { const d = dateOf(i); const c = data.rows[uid][i] || ''; h += `<td class="${isWeekend(d) ? 'we' : ''} ${d === t ? 'today' : ''}">${c ? `<span class="code ${shiftClass(c)}">${esc(c)}</span>` : ''}</td>`; }
+      for (let i = 0; i < data.days; i++) { const d = dateOf(i); const c = data.rows[uid][i] || ''; h += `<td class="${isWeekend(d) ? 'we' : ''} ${d === t ? 'today' : ''}" title="${esc(timeOf(c))}">${c ? `<span class="code ${shiftClass(c, shifts)}">${esc(cellText(c, shifts))}</span>` : ''}</td>`; }
       h += '</tr>';
     }
     $('#grid').innerHTML = h + '</tbody>';
