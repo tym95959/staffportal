@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Register · Staff Portal</title>
+  <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
+  <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/config.js"></script>
+</head>
+<body>
+<div class="auth">
+  <section class="auth-art">
+    <div class="brand"><span class="mark">SP</span><span class="app-name">Staff Portal</span></div>
+    <div>
+      <h2>Create your staff account.</h2>
+      <p>Enter the company code you received from your HR or manager, choose your department, then fill in your details. Your company or department admin approves your account.</p>
+    </div>
+    <p class="small">Use your Staff ID exactly as it appears on the duty roster.</p>
+  </section>
+  <section class="auth-form">
+    <div class="auth-card" style="width:min(100%,520px)">
+      <h1>Register</h1>
+      <p class="sub">Already have an account? <a href="/index.html">Sign in</a></p>
+      <div class="card">
+        <form id="codeForm">
+          <div class="field"><label for="code">Company code</label>
+            <div class="row-between" style="flex-wrap:nowrap">
+              <input id="code" required autocomplete="off" autocapitalize="characters" placeholder="e.g. KOVELI24" style="text-transform:uppercase">
+              <button class="btn" id="codeBtn">Find</button>
+            </div>
+            <div class="hint">Ask your HR, manager or company admin for this code.</div>
+          </div>
+        </form>
+
+        <form id="regForm" hidden>
+          <div class="banner" id="company" style="margin-bottom:14px"></div>
+          <div class="field"><label for="dept">Department</label><select id="dept" required></select></div>
+          <div class="row">
+            <div class="field"><label for="name">Full name</label><input id="name" required autocomplete="name"></div>
+            <div class="field"><label for="staffId">Staff ID</label><input id="staffId" required></div>
+          </div>
+          <div class="row">
+            <div class="field"><label for="designation">Designation</label><input id="designation" required placeholder="e.g. Senior Officer"></div>
+            <div class="field"><label for="phone">Mobile number</label><input id="phone" type="tel" required autocomplete="tel"></div>
+          </div>
+          <div class="field"><label for="email">Email</label><input id="email" type="email" required autocomplete="email"></div>
+          <div class="row">
+            <div class="field"><label for="pw">Password</label><input id="pw" type="password" minlength="8" required autocomplete="new-password"><div class="hint">At least 8 characters.</div></div>
+            <div class="field"><label for="pw2">Confirm password</label><input id="pw2" type="password" minlength="8" required autocomplete="new-password"></div>
+          </div>
+          <div class="actions"><button class="btn" id="regBtn">Create account</button><button type="button" class="btn ghost" id="backBtn">Change company</button></div>
+        </form>
+
+        <div id="done" hidden style="text-align:center">
+          <h2 style="justify-content:center">Registration received</h2>
+          <p class="muted">Your admin will approve your account shortly. You'll be able to use the portal once approved.</p>
+          <a class="btn" href="/dashboard.html">Continue</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<script type="module">
+  import { auth, db, doc, getDoc, setDoc, serverTimestamp, $, esc, toast, busy, api, APP_NAME } from '/js/app.js';
+  import { createUserWithEmailAndPassword, updateProfile } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+  document.title = `Register · ${APP_NAME}`; $('.app-name').textContent = APP_NAME;
+
+  let company = null; // { code, orgId, orgName, departments: [{id, name}] }
+  const fromLink = new URLSearchParams(location.search).get('code');
+  if (fromLink) $('#code').value = fromLink.toUpperCase();
+
+  async function findCompany() {
+    const code = $('#code').value.trim().toUpperCase().replace(/\s+/g, '');
+    if (!code) return;
+    const b = $('#codeBtn'); busy(b, true, '…');
+    try {
+      const s = await getDoc(doc(db, 'joinCodes', code));
+      if (!s.exists() || s.data().active === false) { toast('No company found with that code. Check it and try again.', 'bad'); return; }
+      company = { code, ...s.data() };
+      const depts = (company.departments || []).filter(d => d.active !== false).sort((a, b) => a.name.localeCompare(b.name));
+      if (!depts.length) { toast('This company has no departments set up yet. Please contact your admin.', 'bad'); return; }
+      $('#company').innerHTML = `Registering with <strong>${esc(company.orgName)}</strong>`;
+      $('#dept').innerHTML = (depts.length > 1 ? '<option value="">Choose your department…</option>' : '') + depts.map(d => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('');
+      $('#codeForm').hidden = true; $('#regForm').hidden = false; $('#dept').focus();
+    } catch (err) { toast(err.message, 'bad'); }
+    finally { busy(b, false); }
+  }
+  $('#codeForm').onsubmit = e => { e.preventDefault(); findCompany(); };
+  $('#backBtn').onclick = () => { $('#regForm').hidden = true; $('#codeForm').hidden = false; };
+  if (fromLink) findCompany();
+
+  $('#regForm').onsubmit = async e => {
+    e.preventDefault();
+    if ($('#pw').value !== $('#pw2').value) return toast('Passwords do not match.', 'bad');
+    const deptId = $('#dept').value; if (!deptId) return toast('Choose your department.', 'bad');
+    const b = $('#regBtn'); busy(b, true, 'Creating account…');
+    try {
+      const v = id => $('#' + id).value.trim();
+      const cred = await createUserWithEmailAndPassword(auth, v('email'), $('#pw').value);
+      await updateProfile(cred.user, { displayName: v('name') });
+      await setDoc(doc(db, 'users', cred.user.uid), {
+        name: v('name'), staffId: v('staffId').toUpperCase(), email: v('email').toLowerCase(), phone: v('phone'), designation: v('designation'),
+        orgId: company.orgId, deptId, deptName: company.departments.find(d => d.id === deptId)?.name || '',
+        role: 'staff', status: 'pending', createdAt: serverTimestamp()
+      });
+      api('/api/notify', { event: 'registered' }).catch(() => {}); // tells the admins someone is waiting
+      $('#regForm').hidden = true; $('#done').hidden = false;
+    } catch (err) {
+      const m = { 'auth/email-already-in-use': 'That email is already registered. Try signing in.', 'auth/weak-password': 'Please choose a stronger password.' };
+      toast(m[err.code] || err.message, 'bad'); busy(b, false);
+    }
+  };
+</script>
+</body>
+</html>

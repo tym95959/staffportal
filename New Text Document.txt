@@ -1,0 +1,17 @@
+
+tym95959
+
+
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAlqXAOYrVHV1Vq1VQ2dFtj1CqQNo5-qJE",
+  authDomain: "staffportal-d71d3.firebaseapp.com",
+  projectId: "staffportal-d71d3",
+  storageBucket: "staffportal-d71d3.firebasestorage.app",
+  messagingSenderId: "268135505237",
+  appId: "1:268135505237:web:facbce171f06de4a99e3dc",
+  measurementId: "G-ZWQR6HFL09"
+};
+
+
+self.FCM_VAPID_KEY = "BJdtfacdHrm-pRRc0cH91MPiW_pjJzGPJDiKQ5as1Ivj5i6iQxEl5wPhiplboO78WZbpQ1WZ3b3YYbwYusfvL5Q";

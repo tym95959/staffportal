@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sign in · Staff Portal</title>
+  <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
+  <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/config.js"></script>
+</head>
+<body>
+<div class="auth">
+  <section class="auth-art">
+    <div class="brand"><span class="mark">SP</span><span class="app-name">Staff Portal</span></div>
+    <div>
+      <h2>Everything for your shift, in one place.</h2>
+      <p>Report sick or family responsibility leave, request annual leave, check your duty roster and arrange duty changes with colleagues.</p>
+      <ul><li>SL / FRL reports with certificates</li><li>Duty roster &amp; change alerts</li><li>Duty swaps between colleagues</li><li>Annual leave calendar</li></ul>
+    </div>
+    <p class="small">Turn on notifications after signing in to get alerts on your phone.</p>
+  </section>
+  <section class="auth-form">
+    <div class="auth-card">
+      <h1>Sign in</h1>
+      <p class="sub">Use the email you registered with.</p>
+      <div class="card">
+        <form id="loginForm">
+          <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>
+          <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required></div>
+          <button class="btn block" id="loginBtn">Sign in</button>
+        </form>
+        <form id="resetForm" hidden>
+          <p class="small muted">Enter your email and we'll send you a link to reset your password.</p>
+          <div class="field"><label for="resetEmail">Email</label><input id="resetEmail" type="email" required></div>
+          <button class="btn block" id="resetBtn">Send reset link</button>
+        </form>
+        <p class="small" style="margin:14px 0 0;text-align:center"><a href="#" id="toggleReset">Forgot password?</a></p>
+      </div>
+      <p class="small" style="text-align:center">New staff member? <a href="/register.html">Create an account</a></p>
+    </div>
+  </section>
+</div>
+<script type="module">
+  import { auth, db, doc, getDoc, $, toast, busy, APP_NAME } from '/js/app.js';
+  import { signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+
+  document.title = `Sign in · ${APP_NAME}`; $('.app-name').textContent = APP_NAME;
+  const go = async user => {
+    const s = await getDoc(doc(db, 'users', user.uid)).catch(() => null);
+    location.href = ['admin', 'deptadmin', 'super'].includes(s?.data()?.role) && s.data().status === 'active' ? '/admin.html' : '/dashboard.html';
+  };
+  const stop = onAuthStateChanged(auth, u => { stop(); if (u) go(u); });
+
+  const MSG = { 'auth/invalid-credential': 'Wrong email or password.', 'auth/too-many-requests': 'Too many attempts. Try again in a few minutes.', 'auth/user-disabled': 'This account is disabled.' };
+  $('#loginForm').onsubmit = async e => {
+    e.preventDefault(); const b = $('#loginBtn'); busy(b, true, 'Signing in…');
+    try { const c = await signInWithEmailAndPassword(auth, $('#email').value.trim(), $('#password').value); await go(c.user); }
+    catch (err) { toast(MSG[err.code] || err.message, 'bad'); busy(b, false); }
+  };
+  $('#toggleReset').onclick = e => {
+    e.preventDefault(); const r = $('#resetForm').hidden;
+    $('#resetForm').hidden = !r; $('#loginForm').hidden = r;
+    $('#toggleReset').textContent = r ? 'Back to sign in' : 'Forgot password?';
+    $('#resetEmail').value = $('#email').value;
+  };
+  $('#resetForm').onsubmit = async e => {
+    e.preventDefault(); const b = $('#resetBtn'); busy(b, true, 'Sending…');
+    try { await sendPasswordResetEmail(auth, $('#resetEmail').value.trim()); toast('If that email is registered, a reset link is on its way.', 'ok'); }
+    catch (err) { toast(err.message, 'bad'); }
+    busy(b, false);
+  };
+</script>
+</body>
+</html>

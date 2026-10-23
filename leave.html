@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Annual Leave · Staff Portal</title>
+  <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
+  <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/config.js"></script>
+</head>
+<body>
+<header id="topbar"></header>
+<div id="loading" class="spinner-page">Loading…</div>
+<main class="wrap" id="main" hidden>
+  <div class="page-head"><div><h1>Annual leave</h1><p class="sub">Check how many leave slots are open on each day, then send your request.</p></div></div>
+
+  <div class="grid g3">
+    <div class="card stat"><div class="k">Entitlement</div><div class="v" id="sEnt">—</div></div>
+    <div class="card stat"><div class="k">Taken (approved)</div><div class="v" id="sTaken">—</div></div>
+    <div class="card stat"><div class="k">Remaining</div><div class="v" id="sLeft">—</div><div class="h" id="sPend"></div></div>
+  </div>
+
+  <div class="grid side">
+    <div class="card">
+      <div class="cal-head">
+        <button class="btn ghost sm" id="prev" aria-label="Previous month">‹</button>
+        <h2 id="calTitle" style="margin:0"></h2>
+        <button class="btn ghost sm" id="next" aria-label="Next month">›</button>
+      </div>
+      <div class="cal" id="cal"></div>
+      <div id="calLegend"></div>
+      <p class="small muted" style="margin-bottom:0">Tap a start day, then an end day, to fill in the request form.</p>
+    </div>
+    <div class="card">
+      <h2>New request</h2>
+      <form id="lvForm">
+        <div class="row">
+          <div class="field"><label for="from">From</label><input id="from" type="date" required></div>
+          <div class="field"><label for="to">To</label><input id="to" type="date" required></div>
+        </div>
+        <div id="avail" class="small" style="margin:-4px 0 12px"></div>
+        <div class="field"><label for="reason">Note for admin (optional)</label><textarea id="reason" placeholder="e.g. family trip"></textarea></div>
+        <button class="btn" id="lvBtn">Send request</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>My requests</h2>
+    <div class="table-wrap"><table><thead><tr><th>Dates</th><th>Days</th><th>Note</th><th>Status</th><th>Admin comment</th><th></th></tr></thead><tbody id="mine"></tbody></table></div>
+  </div>
+</main>
+<script type="module">
+  import { requireUser, db, $, $$, esc, fmtShort, pill, plural, today, dateRange, toast, busy, api, byNewest, calendarHTML, CAL_LEGEND, dayStatus, calId,
+    collection, doc, getDoc, addDoc, getDocs, updateDoc, query, where, serverTimestamp, APP_NAME } from '/js/app.js';
+  document.title = `Annual Leave · ${APP_NAME}`;
+  const { user, profile, dept } = await requireUser();
+
+  const ent = profile.alEntitlement ?? self.DEFAULT_AL_DAYS ?? 30, taken = profile.alTaken || 0;
+  $('#sEnt').textContent = plural(ent, 'day'); $('#sTaken').textContent = plural(taken, 'day');
+  $('#sLeft').textContent = plural(Math.max(ent - taken, 0), 'day');
+  $('#calLegend').innerHTML = CAL_LEGEND;
+
+  // calendar
+  const cals = new Map();
+  const getCal = async y => { if (!cals.has(y)) { const s = await getDoc(doc(db, 'leaveCalendar', calId(y))).catch(() => null); if (!s?.exists()) { cals.set(y, {}); return cals.get(y); }; cals.set(y, s.exists() ? s.data() : {}); } return cals.get(y); };
+  let view = new Date(); view.setDate(1);
+  let pick = null;
+  async function drawCal() {
+    const y = view.getFullYear(), m = view.getMonth();
+    $('#calTitle').textContent = view.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    const sel = new Set(dateRange($('#from').value, $('#to').value));
+    $('#cal').innerHTML = calendarHTML(y, m, await getCal(y), sel);
+    $$('#cal .day[data-date]').forEach(b => b.onclick = () => {
+      const d = b.dataset.date;
+      if (!pick || d < pick) { pick = d; $('#from').value = $('#to').value = d; }
+      else { $('#to').value = d; pick = null; }
+      checkAvail(); drawCal();
+    });
+  }
+  $('#prev').onclick = () => { view.setMonth(view.getMonth() - 1); drawCal(); };
+  $('#next').onclick = () => { view.setMonth(view.getMonth() + 1); drawCal(); };
+
+  async function checkAvail() {
+    const days = dateRange($('#from').value, $('#to').value);
+    if (!days.length) { $('#avail').innerHTML = '<span style="color:var(--bad)">End date must be on or after the start date.</span>'; return; }
+    const problems = [];
+    for (const d of days) { const s = dayStatus(await getCal(Number(d.slice(0, 4))), d); if (s.state === 'full' || s.state === 'closed') problems.push(`${fmtShort(d)} (${s.state === 'full' ? 'full' : 'no leave allowed'})`); }
+    $('#avail').innerHTML = `<strong>${plural(days.length, 'day')}</strong>` + (problems.length
+      ? `<div style="color:var(--bad);margin-top:4px">Not available: ${problems.join(', ')}. You can still send the request, but it may be rejected.</div>`
+      : ' · <span style="color:var(--ok)">slots available on all selected days</span>');
+  }
+  $('#from').value = $('#to').value = today();
+  $('#from').onchange = () => { if ($('#to').value < $('#from').value) $('#to').value = $('#from').value; checkAvail(); drawCal(); };
+  $('#to').onchange = () => { checkAvail(); drawCal(); };
+  drawCal(); checkAvail();
+
+  $('#lvForm').onsubmit = async e => {
+    e.preventDefault();
+    const from = $('#from').value, to = $('#to').value, days = dateRange(from, to).length;
+    if (!days) return toast('Check the dates.', 'bad');
+    if (from < today()) return toast('Leave must start today or later.', 'bad');
+    const b = $('#lvBtn'); busy(b, true, 'Sending…');
+    try {
+      const ref = await addDoc(collection(db, 'leaveRequests'), {
+        uid: user.uid, staffName: profile.name, staffId: profile.staffId || '', orgId: profile.orgId, deptId: profile.deptId, deptName: dept?.name || profile.deptName || '', email: profile.email,
+        fromDate: from, toDate: to, days, reason: $('#reason').value.trim(), status: 'pending', createdAt: serverTimestamp()
+      });
+      try { await api('/api/notify', { event: 'leave_request', id: ref.id }); } catch (err) { toast('Saved, but notification failed: ' + err.message, 'bad'); }
+      toast('Leave request sent for approval.', 'ok'); $('#reason').value = ''; loadMine();
+    } catch (err) { toast(err.message, 'bad'); }
+    busy(b, false);
+  };
+
+  async function loadMine() {
+    const s = await getDocs(query(collection(db, 'leaveRequests'), where('uid', '==', user.uid)));
+    const list = s.docs.map(d => ({ id: d.id, ...d.data() })).sort(byNewest);
+    const pend = list.filter(r => r.status === 'pending').reduce((a, r) => a + r.days, 0);
+    $('#sPend').textContent = pend ? `${plural(pend, 'day')} awaiting approval` : '';
+    $('#mine').innerHTML = list.length ? list.map(r => `<tr><td>${fmtShort(r.fromDate)} – ${fmtShort(r.toDate)}</td><td>${r.days}</td>
+      <td>${esc(r.reason || '')}</td><td>${pill(r.status)}</td><td>${esc(r.adminComment || '')}</td>
+      <td>${r.status === 'pending' ? `<button class="btn ghost sm" data-cancel="${r.id}">Cancel</button>` : ''}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="empty">No requests yet.</td></tr>';
+    $$('[data-cancel]').forEach(b => b.onclick = async () => {
+      if (!confirm('Cancel this leave request?')) return;
+      await updateDoc(doc(db, 'leaveRequests', b.dataset.cancel), { status: 'cancelled', updatedAt: serverTimestamp() });
+      toast('Request cancelled.'); loadMine();
+    });
+  }
+  loadMine();
+</script>
+</body>
+</html>

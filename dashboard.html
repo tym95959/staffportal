@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dashboard · Staff Portal</title>
+  <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
+  <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/config.js"></script>
+</head>
+<body>
+<header id="topbar"></header>
+<div id="loading" class="spinner-page">Loading…</div>
+<main class="wrap" id="main" hidden>
+  <div class="page-head">
+    <div><h1 id="hello">Welcome</h1><p class="sub" id="whoami"></p></div>
+    <div class="actions"><a class="btn accent" href="/report.html">Report SL / FRL</a><a class="btn ghost" href="/leave.html">Request annual leave</a></div>
+  </div>
+
+  <div class="banner warn" id="pushBanner" hidden>
+    <span>Turn on notifications to get roster changes and duty-change requests on this phone or computer.</span>
+    <button class="btn sm" id="pushBtn">Enable notifications</button>
+  </div>
+
+  <div class="grid g4">
+    <div class="card stat"><div class="k">Today's duty</div><div class="v" id="sToday">—</div><div class="h" id="sTodayH"></div></div>
+    <div class="card stat"><div class="k">Annual leave left</div><div class="v" id="sAL">—</div><div class="h" id="sALH"></div></div>
+    <div class="card stat"><div class="k">Duty-change requests for you</div><div class="v" id="sSwap">—</div><div class="h"><a href="/swap.html">Review requests</a></div></div>
+    <div class="card stat"><div class="k">Leave awaiting approval</div><div class="v" id="sPend">—</div><div class="h"><a href="/leave.html">View leave</a></div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div class="row-between" style="margin-bottom:12px"><h2 style="margin:0">Next 14 days</h2><a class="small" href="/roster.html">Full roster →</a></div>
+    <div class="duty-strip" id="upcoming"><div class="muted">Loading…</div></div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card"><h2>My SL / FRL reports</h2><div id="reports"><div class="empty">Loading…</div></div></div>
+    <div class="card"><h2>My annual leave requests</h2><div id="leaves"><div class="empty">Loading…</div></div></div>
+  </div>
+
+  <div class="card">
+    <h2>My details</h2>
+    <div class="grid g3" style="margin:0" id="details"></div>
+    <form id="phoneForm" class="row-between" style="max-width:460px;margin-top:6px">
+      <div style="flex:1"><label for="phone">Mobile number</label><input id="phone" type="tel" required></div>
+      <button class="btn ghost" style="align-self:flex-end">Save</button>
+    </form>
+    <p class="small muted" style="margin-bottom:0">Other details are managed by the admin. Contact the office if something is wrong.</p>
+  </div>
+</main>
+<script type="module">
+  import { requireUser, db, $, esc, fmtShort, fmtTs, pill, plural, ymd, today, loadRoster, shiftLabel, OFF_CODES, shiftClass,
+    collection, query, where, getDocs, doc, updateDoc, serverTimestamp, enablePush, pushEnabled, toast, byNewest, APP_NAME } from '/js/app.js';
+  document.title = `Dashboard · ${APP_NAME}`;
+  const { user, profile, org, dept } = await requireUser();
+
+  const h = new Date().getHours();
+  $('#hello').textContent = `${h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'}, ${profile.name.split(' ')[0]}`;
+  $('#whoami').textContent = [profile.staffId, profile.designation, dept?.name, org?.name].filter(Boolean).join(' · ');
+
+  // push banner
+  if (!pushEnabled()) { $('#pushBanner').hidden = false; }
+  $('#pushBtn').onclick = async () => {
+    try { await enablePush(user.uid); $('#pushBanner').hidden = true; toast('Notifications enabled on this device.', 'ok'); }
+    catch (e) { toast(e.message, 'bad', 8000); }
+  };
+
+  // annual leave balance
+  const ent = profile.alEntitlement ?? self.DEFAULT_AL_DAYS ?? 30, taken = profile.alTaken || 0;
+  $('#sAL').textContent = plural(Math.max(ent - taken, 0), 'day');
+  $('#sALH').textContent = `${taken} taken of ${ent}`;
+
+  // upcoming duties
+  (async () => {
+    const days = []; const d = new Date();
+    for (let i = 0; i < 14; i++) { days.push(ymd(d)); d.setDate(d.getDate() + 1); }
+    const months = [...new Set(days.map(x => x.slice(0, 7)))];
+    const rosters = Object.fromEntries(await Promise.all(months.map(async m => [m, await loadRoster(m)])));
+    const legend = Object.assign({}, ...Object.values(rosters).map(r => r?.legend || {}));
+    const code = x => rosters[x.slice(0, 7)]?.rows?.[user.uid]?.[Number(x.slice(8)) - 1] || '';
+    const tc = code(today());
+    $('#sToday').textContent = tc || '—';
+    $('#sTodayH').textContent = tc ? (legend[tc] || '') : (rosters[today().slice(0, 7)] ? 'Not rostered' : 'Roster not published');
+    if (!Object.values(rosters).some(Boolean)) { $('#upcoming').innerHTML = '<div class="muted">No roster has been published for these dates yet.</div>'; return; }
+    $('#upcoming').innerHTML = days.map(x => {
+      const c = code(x), dt = new Date(x + 'T00:00');
+      return `<div class="duty ${shiftClass(c)} ${x === today() ? 'today' : ''} ${!c || OFF_CODES.includes(c) ? 'off' : ''}" title="${esc(shiftLabel(c, legend))}">
+        <div class="d">${dt.toLocaleDateString(undefined, { weekday: 'short' })} ${dt.getDate()}</div><div class="c">${esc(c || '—')}</div></div>`;
+    }).join('');
+  })();
+
+  // swaps for me
+  getDocs(query(collection(db, 'swaps'), where('targetUid', '==', user.uid), where('status', '==', 'pending')))
+    .then(s => $('#sSwap').textContent = s.size).catch(() => $('#sSwap').textContent = '0');
+
+  // reports
+  getDocs(query(collection(db, 'reports'), where('uid', '==', user.uid))).then(s => {
+    const list = s.docs.map(d => d.data()).sort(byNewest).slice(0, 5);
+    $('#reports').innerHTML = list.length ? list.map(r => `<div class="list-item"><div><strong>${r.type}</strong> · ${fmtShort(r.fromDate)} – ${fmtShort(r.toDate)}
+      <div class="small muted">${plural(r.days, 'day')} · sent ${fmtTs(r.createdAt)}</div></div>${pill(r.status)}</div>`).join('')
+      : '<div class="empty">No reports yet.</div>';
+  });
+
+  // leave
+  getDocs(query(collection(db, 'leaveRequests'), where('uid', '==', user.uid))).then(s => {
+    const all = s.docs.map(d => d.data()).sort(byNewest);
+    $('#sPend').textContent = all.filter(r => r.status === 'pending').length;
+    $('#leaves').innerHTML = all.length ? all.slice(0, 5).map(r => `<div class="list-item"><div>${fmtShort(r.fromDate)} – ${fmtShort(r.toDate)}
+      <div class="small muted">${plural(r.days, 'day')}${r.adminComment ? ' · ' + esc(r.adminComment) : ''}</div></div>${pill(r.status)}</div>`).join('')
+      : '<div class="empty">No leave requests yet.</div>';
+  });
+
+  // details
+  const item = (k, v) => `<div><div class="small muted" style="font-weight:700">${k}</div><div>${esc(v || '—')}</div></div>`;
+  $('#details').innerHTML = item('Name', profile.name) + item('Staff ID', profile.staffId) + item('Email', profile.email)
+    + item('Company', org?.name) + item('Department', dept?.name || profile.deptName) + item('Designation', profile.designation) + item('Duty level / grade', profile.level);
+  $('#phone').value = profile.phone || '';
+  $('#phoneForm').onsubmit = async e => {
+    e.preventDefault();
+    try { await updateDoc(doc(db, 'users', user.uid), { phone: $('#phone').value.trim(), updatedAt: serverTimestamp() }); toast('Saved.', 'ok'); }
+    catch (err) { toast(err.message, 'bad'); }
+  };
+</script>
+</body>
+</html>

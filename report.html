@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SL / FRL Report · Staff Portal</title>
+  <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
+  <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/config.js"></script>
+</head>
+<body>
+<header id="topbar"></header>
+<div id="loading" class="spinner-page">Loading…</div>
+<main class="wrap" id="main" hidden>
+  <div class="page-head"><div><h1>Report SL / FRL</h1><p class="sub">Confidential: your report and attachments are emailed only to your company's designated SL / FRL recipients. Attachments are not stored in the portal.</p></div></div>
+
+  <div class="grid side">
+    <div class="card">
+      <form id="repForm">
+        <div class="field">
+          <label>Type of leave</label>
+          <div class="seg">
+            <label><input type="radio" name="type" value="SL" checked><span>Sick Leave (SL)<small>Attach a medical certificate if you have one</small></span></label>
+            <label><input type="radio" name="type" value="FRL"><span>Family Responsibility Leave (FRL)<small>Attach any supporting document</small></span></label>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="from">From</label><input id="from" type="date" required></div>
+          <div class="field"><label for="to">To</label><input id="to" type="date" required></div>
+        </div>
+        <p class="small muted" id="daysInfo" style="margin-top:-6px"></p>
+        <div class="field"><label for="reason">Reason / details</label><textarea id="reason" required placeholder="Briefly describe the reason"></textarea></div>
+        <div class="field">
+          <label>Attachments <span class="muted" style="font-weight:500">(medical certificate etc. — PDF or photo, up to 3 MB in total; photos are shrunk automatically)</span></label>
+          <label class="dropzone" id="drop" for="files">Tap to choose files, or drag them here</label>
+          <input id="files" type="file" accept="image/*,application/pdf" multiple hidden>
+          <div class="chips" id="fileChips"></div>
+        </div>
+        <button class="btn" id="sendBtn">Submit report</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2>My previous reports</h2>
+      <div id="history"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+</main>
+<script type="module">
+  import { requireUser, db, $, $$, esc, fmtShort, fmtTs, pill, plural, today, dateRange, toast, busy, api, byNewest,
+    collection, doc, setDoc, getDocs, query, where, serverTimestamp, APP_NAME } from '/js/app.js';
+  document.title = `SL / FRL Report · ${APP_NAME}`;
+  const { user, profile, org, dept } = await requireUser();
+
+  $('#from').value = $('#to').value = today();
+  const updDays = () => {
+    const n = dateRange($('#from').value, $('#to').value).length;
+    $('#daysInfo').textContent = n ? `${plural(n, 'day')} (inclusive)` : 'End date must be on or after the start date.';
+  };
+  $('#from').onchange = () => { if ($('#to').value < $('#from').value) $('#to').value = $('#from').value; updDays(); };
+  $('#to').onchange = updDays; updDays();
+
+  // attachments — sent straight to the email, never stored. Photos are shrunk so they fit the upload limit.
+  let files = [];             // { name, type, data (base64), size }
+  let pendingId = null;       // report saved but email not yet sent (retry uses the same report)
+  const LIMIT = 3 * 1024 * 1024; // total per report (server request limit is ~4.5 MB after encoding)
+  const total = () => files.reduce((a, f) => a + f.size, 0);
+  const toB64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+  async function shrinkImage(f) {
+    if (!f.type.startsWith('image/') || f.type === 'image/gif') return f;
+    try {
+      const img = await createImageBitmap(f);
+      const scale = Math.min(1, 1800 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      const out = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
+      return out && out.size < f.size ? new File([out], f.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : f;
+    } catch { return f; }
+  }
+  const addFiles = async list => {
+    for (const raw of list) {
+      if (!(raw.type.startsWith('image/') || raw.type === 'application/pdf')) { toast(`${raw.name}: only PDF or image files`, 'bad'); continue; }
+      if (files.length >= 5) { toast('Up to 5 files per report', 'bad'); break; }
+      const f = await shrinkImage(raw);
+      if (total() + f.size > LIMIT) { toast(`${raw.name} is too large — attachments can be ${(LIMIT / 1024 / 1024).toFixed(1)} MB in total. Try a photo instead of a scan, or a smaller PDF.`, 'bad', 8000); continue; }
+      files.push({ name: f.name, type: f.type, size: f.size, data: await toB64(f) });
+    }
+    renderFiles();
+  };
+  const renderFiles = () => {
+    $('#fileChips').innerHTML = files.map((f, i) => `<span class="chip">${esc(f.name)} <span class="muted">${(f.size / 1024).toFixed(0)} KB</span><button type="button" data-i="${i}" aria-label="Remove">×</button></span>`).join('')
+      + (files.length ? `<span class="small muted" style="align-self:center">${(total() / 1024 / 1024).toFixed(1)} of ${(LIMIT / 1024 / 1024).toFixed(1)} MB</span>` : '');
+    $$('#fileChips button').forEach(b => b.onclick = () => { files.splice(+b.dataset.i, 1); renderFiles(); });
+  };
+  $('#files').onchange = e => { addFiles([...e.target.files]); e.target.value = ''; };
+  const drop = $('#drop');
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => addFiles([...e.dataTransfer.files]));
+
+  // submit: save the report (without files), then the server emails it with the files attached
+  $('#repForm').onsubmit = async e => {
+    e.preventDefault();
+    const type = $('input[name=type]:checked').value;
+    const from = $('#from').value, to = $('#to').value, days = dateRange(from, to).length;
+    if (!days) return toast('Check the dates.', 'bad');
+    const btn = $('#sendBtn'); busy(btn, true, 'Sending…');
+    try {
+      if (!pendingId) {
+        const ref = doc(collection(db, 'reports'));
+        await setDoc(ref, {
+          uid: user.uid, staffName: profile.name, staffId: profile.staffId || '', orgId: profile.orgId, deptId: profile.deptId, deptName: dept?.name || profile.deptName || '', email: profile.email,
+          type, fromDate: from, toDate: to, days, reason: $('#reason').value.trim(),
+          attachments: files.map(f => ({ name: f.name, size: f.size, type: f.type })), status: 'submitted', createdAt: serverTimestamp()
+        });
+        pendingId = ref.id;
+      }
+      try {
+        const r = await api('/api/notify', { event: 'report', id: pendingId, files: files.map(({ name, type, data }) => ({ name, type, data })) });
+        toast(`Report sent to ${plural(r.emailed || 0, 'email recipient')}${files.length ? ' with ' + plural(files.length, 'attachment') : ''}.`, 'ok');
+        pendingId = null; e.target.reset(); files = []; renderFiles(); $('#from').value = $('#to').value = today(); updDays();
+        btn.dataset.label = 'Submit report';
+      } catch (err) {
+        toast('Your report is saved, but the email could not be sent: ' + err.message + ' — press "Try sending again".', 'bad', 10000);
+        btn.dataset.label = 'Try sending again';
+      }
+      loadHistory();
+    } catch (err) { toast(err.message, 'bad'); }
+    busy(btn, false);
+  };
+
+  async function loadHistory() {
+    const s = await getDocs(query(collection(db, 'reports'), where('uid', '==', user.uid)));
+    const list = s.docs.map(d => d.data()).sort(byNewest);
+    $('#history').innerHTML = list.length ? list.map(r => `<div class="list-item"><div>
+        <strong>${r.type}</strong> · ${fmtShort(r.fromDate)} – ${fmtShort(r.toDate)} <span class="muted small">(${plural(r.days, 'day')})</span>
+        <div class="small muted">${esc(r.reason)}</div>
+        <div class="small">${(r.attachments || []).length ? '📎 ' + r.attachments.map(a => esc(a.name)).join(' · ') + (r.notifiedAt ? ' <span class="muted">(emailed)</span>' : ' <span style="color:var(--c-red)">(not emailed yet)</span>') : ''}</div>
+        <div class="small muted">Sent ${fmtTs(r.createdAt)}</div></div>${pill(r.status)}</div>`).join('')
+      : '<div class="empty">No reports yet.</div>';
+  }
+  loadHistory();
+</script>
+</body>
+</html>

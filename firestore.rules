@@ -1,0 +1,172 @@
+rules_version = '2';
+// ============================================================================
+//  Staff Portal — multi-company security rules
+//
+//  Roles (users/{uid}.role):
+//    super      platform owner: creates companies, can manage every company
+//    admin      company admin: everything inside their own company (orgId)
+//    deptadmin  department admin: only their own department (orgId + deptId)
+//    staff      their own data + their department's roster / colleagues
+//
+//  Rosters and leave calendars are per department, with ids
+//    rosters/{orgId}__{deptId}__{YYYY-MM}      leaveCalendar/{orgId}__{deptId}__{YYYY}
+// ============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function me() { return get(userPath(request.auth.uid)).data; }
+    function isActive() { return signedIn() && exists(userPath(request.auth.uid)) && me().status == 'active'; }
+    function isSuper() { return isActive() && me().get('role', '') == 'super'; }
+    // company admin (or platform owner) of orgId
+    function isAdminOf(orgId) { return isSuper() || (isActive() && me().get('role', '') == 'admin' && me().get('orgId', '') == orgId); }
+    // can manage department deptId of orgId (company admin, or that department's admin)
+    function isMgrOf(orgId, deptId) {
+      return isAdminOf(orgId) || (isActive() && me().get('role', '') == 'deptadmin' && me().get('orgId', '') == orgId && me().get('deptId', '') == deptId);
+    }
+    // active staff member of that department
+    function isMember(orgId, deptId) { return isActive() && me().get('orgId', '') == orgId && me().get('deptId', '') == deptId; }
+    function changedOnly(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+    // which roles the current user may give someone in orgId
+    function canAssign(orgId, role) {
+      return isSuper()
+        || (isAdminOf(orgId) && role in ['staff', 'deptadmin', 'admin'])
+        || (isActive() && me().get('role', '') == 'deptadmin' && me().get('orgId', '') == orgId && role in ['staff', 'deptadmin']);
+    }
+    function deptPath(deptId) { return /databases/$(database)/documents/departments/$(deptId); }
+    function deptOrg(deptId) { return get(deptPath(deptId)).data.orgId; }
+
+    // ---------------------------------------------------------------- companies
+    match /orgs/{orgId} {
+      allow read: if isSuper() || (isActive() && me().get('orgId', '') == orgId);
+      allow create, delete: if isSuper();
+      // company admins edit their details, but only the platform owner can (de)activate a company
+      allow update: if isAdminOf(orgId) && (isSuper() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['active']));
+    }
+    // company-wide email lists and notification options (admins only)
+    match /orgSettings/{orgId} {
+      allow read, write: if isAdminOf(orgId);
+    }
+    // company code → company + department names, used on the registration page.
+    // Anyone may look up a code they know (get), nobody but the owner can list them.
+    match /joinCodes/{code} {
+      allow get: if true;
+      allow list: if isSuper();
+      allow create: if isAdminOf(request.resource.data.orgId);
+      allow update: if isAdminOf(resource.data.orgId) && request.resource.data.orgId == resource.data.orgId;
+      allow delete: if isAdminOf(resource.data.orgId);
+    }
+
+    // -------------------------------------------------------------- departments
+    match /departments/{deptId} {
+      allow read: if isActive() && (isSuper() || me().get('orgId', '') == resource.data.orgId);
+      allow create: if isAdminOf(request.resource.data.orgId);
+      allow update: if isAdminOf(resource.data.orgId) && request.resource.data.orgId == resource.data.orgId;
+      allow delete: if isAdminOf(resource.data.orgId);
+    }
+    // department email lists / shift codes (company admin or that department's admin)
+    match /deptSettings/{deptId} {
+      allow read, write: if exists(deptPath(deptId)) && isMgrOf(deptOrg(deptId), deptId);
+    }
+
+    // -------------------------------------------------------------------- users
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isMgrOf(resource.data.orgId, resource.data.deptId));
+      // self-registration with a company code: always pending staff, department must belong to the company
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == 'staff'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.keys().hasOnly(['name','staffId','email','phone','orgId','deptId','deptName','designation','role','status','createdAt'])
+        && exists(/databases/$(database)/documents/orgs/$(request.resource.data.orgId))
+        && get(/databases/$(database)/documents/orgs/$(request.resource.data.orgId)).data.active == true
+        && exists(deptPath(request.resource.data.deptId))
+        && deptOrg(request.resource.data.deptId) == request.resource.data.orgId;
+      // staff may change only their phone and push tokens
+      allow update: if signedIn() && request.auth.uid == uid && changedOnly(['phone','fcmTokens','updatedAt']);
+      // managers: inside their scope, cannot hand out roles above their own, cannot move people to another company
+      allow update: if isMgrOf(resource.data.orgId, resource.data.deptId)
+        && isMgrOf(request.resource.data.orgId, request.resource.data.deptId)
+        && canAssign(resource.data.orgId, resource.data.role)
+        && canAssign(request.resource.data.orgId, request.resource.data.role)
+        && (isSuper() || request.resource.data.orgId == resource.data.orgId);
+      allow delete: if isAdminOf(resource.data.orgId);
+    }
+
+    // Colleague directory (name, staff ID, level) — no emails or phone numbers
+    match /directory/{uid} {
+      allow read: if isMember(resource.data.orgId, resource.data.deptId) || isMgrOf(resource.data.orgId, resource.data.deptId);
+      allow create: if isMgrOf(request.resource.data.orgId, request.resource.data.deptId);
+      allow update: if isMgrOf(resource.data.orgId, resource.data.deptId) && isMgrOf(request.resource.data.orgId, request.resource.data.deptId);
+      allow delete: if isMgrOf(resource.data.orgId, resource.data.deptId);
+    }
+
+    // ------------------------------------------------------------ SL/FRL reports
+    // Attachments are never stored — they are emailed directly to the designated recipients.
+    match /reports/{id} {
+      allow create: if isActive()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.orgId == me().get('orgId', '')
+        && request.resource.data.deptId == me().get('deptId', '')
+        && request.resource.data.status == 'submitted'
+        && request.resource.data.type in ['SL', 'FRL'];
+      allow read: if isActive() && (resource.data.uid == request.auth.uid || isMgrOf(resource.data.orgId, resource.data.deptId));
+      allow update: if isMgrOf(resource.data.orgId, resource.data.deptId) && changedOnly(['status','acknowledgedBy','acknowledgedAt']);
+    }
+
+    // ------------------------------------------------------------ annual leave
+    match /leaveRequests/{id} {
+      allow create: if isActive()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.orgId == me().get('orgId', '')
+        && request.resource.data.deptId == me().get('deptId', '')
+        && request.resource.data.status == 'pending';
+      allow read: if isActive() && (resource.data.uid == request.auth.uid || isMgrOf(resource.data.orgId, resource.data.deptId));
+      allow update: if isMgrOf(resource.data.orgId, resource.data.deptId)
+        || (isActive() && resource.data.uid == request.auth.uid && resource.data.status == 'pending'
+            && request.resource.data.status == 'cancelled' && changedOnly(['status','updatedAt']));
+    }
+
+    // ------------------------------------------------------------ duty changes
+    // Same company, same department, same level. Accept/decline goes through /api/swap-respond.
+    function colleagueOk(targetUid) {
+      return get(/databases/$(database)/documents/directory/$(targetUid)).data.active == true
+        && get(/databases/$(database)/documents/directory/$(targetUid)).data.orgId == me().get('orgId', '')
+        && get(/databases/$(database)/documents/directory/$(targetUid)).data.deptId == me().get('deptId', '')
+        && get(/databases/$(database)/documents/directory/$(targetUid)).data.level == me().get('level', '');
+    }
+    match /swaps/{id} {
+      allow create: if isActive()
+        && request.resource.data.requesterUid == request.auth.uid
+        && request.resource.data.targetUid != request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.orgId == me().get('orgId', '')
+        && request.resource.data.deptId == me().get('deptId', '')
+        && request.resource.data.level == me().get('level', '')
+        && colleagueOk(request.resource.data.targetUid);
+      allow read: if isActive() && (resource.data.requesterUid == request.auth.uid || resource.data.targetUid == request.auth.uid
+        || isMgrOf(resource.data.orgId, resource.data.deptId));
+      allow update: if isMgrOf(resource.data.orgId, resource.data.deptId)
+        || (isActive() && resource.data.requesterUid == request.auth.uid && resource.data.status == 'pending'
+            && request.resource.data.status == 'cancelled' && changedOnly(['status','updatedAt']));
+    }
+
+    // ------------------------------------------------- rosters & leave calendars
+    match /rosters/{rid} {
+      allow read: if rid.split('__').size() == 3
+        && (isMember(rid.split('__')[0], rid.split('__')[1]) || isMgrOf(rid.split('__')[0], rid.split('__')[1]));
+      allow write: if rid.split('__').size() == 3 && isMgrOf(rid.split('__')[0], rid.split('__')[1]);
+    }
+    match /leaveCalendar/{cid} {
+      allow read: if cid.split('__').size() == 3
+        && (isMember(cid.split('__')[0], cid.split('__')[1]) || isMgrOf(cid.split('__')[0], cid.split('__')[1]));
+      allow write: if cid.split('__').size() == 3 && isMgrOf(cid.split('__')[0], cid.split('__')[1]);
+    }
+
+    // -------------------------------------------- in-app notifications (bell)
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow update: if signedIn() && resource.data.uid == request.auth.uid && changedOnly(['read']);
+    }
+  }
+}

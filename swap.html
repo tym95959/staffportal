@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Duty Change · Staff Portal</title>
+  <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
+  <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/config.js"></script>
+</head>
+<body>
+<header id="topbar"></header>
+<div id="loading" class="spinner-page">Loading…</div>
+<main class="wrap" id="main" hidden>
+  <div class="page-head"><div><h1>Duty change</h1><p class="sub">Swap a duty with a colleague in your department at the same level. When they accept, the roster updates and the office is notified.</p></div></div>
+
+  <div class="card" id="incomingCard" style="margin-bottom:16px">
+    <h2>Requests waiting for you</h2>
+    <div id="incoming"><div class="empty">Loading…</div></div>
+  </div>
+
+  <div class="grid side">
+    <div class="card">
+      <h2>Request a duty change</h2>
+      <div class="banner warn" id="noLevel" hidden>Your duty level hasn't been set by the admin yet, so you can't request a duty change.</div>
+      <form id="swForm">
+        <div class="row">
+          <div class="field"><label for="myDate">My duty date</label><input id="myDate" type="date" required><div class="hint" id="myShift"></div></div>
+          <div class="field"><label for="target">Swap with</label><select id="target" required><option value="">Choose a colleague…</option></select><div class="hint" id="levelHint"></div></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="theirDate">Their duty date</label><input id="theirDate" type="date" required><div class="hint" id="theirShift"></div></div>
+          <div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" id="same" checked> Same day (exchange shifts)</label></div>
+        </div>
+        <div class="banner" id="summary" style="font-weight:500" hidden></div>
+        <div class="field"><label for="reason">Reason</label><textarea id="reason" required placeholder="Why do you need the change?"></textarea></div>
+        <button class="btn" id="swBtn">Send request</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2>My requests</h2>
+      <div id="mine"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+</main>
+<script type="module">
+  import { requireUser, db, $, $$, esc, fmtDate, fmtShort, fmtTs, pill, today, toast, busy, api, byNewest, shiftOn, loadRoster,
+    collection, doc, addDoc, getDocs, updateDoc, query, where, serverTimestamp, APP_NAME } from '/js/app.js';
+  document.title = `Duty Change · ${APP_NAME}`;
+  const { user, profile, dept } = await requireUser();
+
+  // colleagues at same level
+  let colleagues = [];
+  if (!profile.level) { $('#noLevel').hidden = false; $('#swForm').querySelectorAll('input,select,textarea,button').forEach(x => x.disabled = true); }
+  else {
+    const s = await getDocs(query(collection(db, 'directory'), where('orgId', '==', profile.orgId), where('deptId', '==', profile.deptId), where('level', '==', profile.level), where('active', '==', true)));
+    colleagues = s.docs.map(d => ({ uid: d.id, ...d.data() })).filter(c => c.uid !== user.uid).sort((a, b) => a.name.localeCompare(b.name));
+    $('#target').innerHTML += colleagues.map(c => `<option value="${c.uid}">${esc(c.name)} (${esc(c.staffId || '')})</option>`).join('');
+    $('#levelHint').textContent = colleagues.length ? `Colleagues in ${dept?.name || 'your department'} at level "${profile.level}"` : `No other active staff in ${dept?.name || 'your department'} at level "${profile.level}"`;
+  }
+
+  $('#myDate').value = $('#theirDate').value = today();
+  $('#myDate').min = $('#theirDate').min = today();
+  const sameDay = () => $('#same').checked;
+  async function preview() {
+    if (sameDay()) $('#theirDate').value = $('#myDate').value;
+    $('#theirDate').disabled = sameDay();
+    const md = $('#myDate').value, td = $('#theirDate').value, t = $('#target').value;
+    const mine = md ? await shiftOn(user.uid, md) : '';
+    $('#myShift').textContent = md ? (mine ? `You are on: ${mine}` : (await loadRoster(md.slice(0, 7)) ? 'You are not rostered that day' : 'Roster not published for that month')) : '';
+    const theirs = t && td ? await shiftOn(t, td) : '';
+    $('#theirShift').textContent = t && td ? (theirs ? `They are on: ${theirs}` : 'They are not rostered that day') : '';
+    const c = colleagues.find(x => x.uid === t);
+    $('#summary').hidden = !c;
+    if (c) $('#summary').innerHTML = md === td
+      ? `On <strong>${fmtDate(md)}</strong> you take <strong>${esc(c.name)}</strong>'s duty (${esc(theirs || '—')}) and they take yours (${esc(mine || '—')}).`
+      : `<strong>${esc(c.name)}</strong> works your duty on <strong>${fmtDate(md)}</strong> (${esc(mine || '—')}); you work their duty on <strong>${fmtDate(td)}</strong> (${esc(theirs || '—')}).`;
+    return { mine, theirs, c };
+  }
+  ['myDate', 'theirDate', 'target', 'same'].forEach(id => $('#' + id).addEventListener('change', preview));
+  preview();
+
+  $('#swForm').onsubmit = async e => {
+    e.preventDefault();
+    const { mine, theirs, c } = await preview();
+    if (!c) return toast('Choose a colleague.', 'bad');
+    const b = $('#swBtn'); busy(b, true, 'Sending…');
+    try {
+      const ref = await addDoc(collection(db, 'swaps'), {
+        requesterUid: user.uid, requesterName: profile.name, requesterStaffId: profile.staffId || '', orgId: profile.orgId, deptId: profile.deptId,
+        targetUid: c.uid, targetName: c.name, targetStaffId: c.staffId || '', level: profile.level,
+        requesterDate: $('#myDate').value, requesterShift: mine, targetDate: $('#theirDate').value, targetShift: theirs,
+        reason: $('#reason').value.trim(), status: 'pending', createdAt: serverTimestamp()
+      });
+      try { await api('/api/notify', { event: 'swap_request', id: ref.id }); } catch (err) { toast('Saved, but notification failed: ' + err.message, 'bad'); }
+      toast(`Request sent to ${c.name}.`, 'ok'); $('#reason').value = ''; loadLists();
+    } catch (err) { toast(err.message, 'bad'); }
+    busy(b, false);
+  };
+
+  const describe = s => s.requesterDate === s.targetDate
+    ? `${fmtShort(s.requesterDate)}: ${esc(s.requesterShift || '—')} ⇄ ${esc(s.targetShift || '—')}`
+    : `${fmtShort(s.requesterDate)} (${esc(s.requesterShift || '—')}) ⇄ ${fmtShort(s.targetDate)} (${esc(s.targetShift || '—')})`;
+
+  async function loadLists() {
+    const [inc, out] = await Promise.all([
+      getDocs(query(collection(db, 'swaps'), where('targetUid', '==', user.uid))),
+      getDocs(query(collection(db, 'swaps'), where('requesterUid', '==', user.uid)))
+    ]);
+    const incoming = inc.docs.map(d => ({ id: d.id, ...d.data() })).sort(byNewest);
+    const mine = out.docs.map(d => ({ id: d.id, ...d.data() })).sort(byNewest);
+    $('#incoming').innerHTML = incoming.length ? incoming.slice(0, 20).map(s => `<div class="list-item"><div>
+        <strong>${esc(s.requesterName)}</strong> wants to change duty with you<div class="small">${describe(s)}</div>
+        <div class="small muted">${esc(s.reason)} · ${fmtTs(s.createdAt)}</div></div>
+        <div class="actions">${s.status === 'pending' ? `<button class="btn ok sm" data-acc="${s.id}">Accept</button><button class="btn ghost sm" data-rej="${s.id}">Decline</button>` : pill(s.status)}</div></div>`).join('')
+      : '<div class="empty">No requests for you.</div>';
+    $('#mine').innerHTML = mine.length ? mine.map(s => `<div class="list-item"><div>With <strong>${esc(s.targetName)}</strong>
+        <div class="small">${describe(s)}</div><div class="small muted">${fmtTs(s.createdAt)}</div></div>
+        <div class="actions">${pill(s.status)}${s.status === 'pending' ? `<button class="btn ghost sm" data-cancel="${s.id}">Cancel</button>` : ''}</div></div>`).join('')
+      : '<div class="empty">You haven\'t sent any requests.</div>';
+
+    const respond = async (id, decision, btn) => {
+      if (decision === 'reject' && !confirm('Decline this duty change?')) return;
+      busy(btn, true, '…');
+      try { await api('/api/swap-respond', { id, decision }); toast(decision === 'accept' ? 'Accepted — roster updated and everyone notified.' : 'Declined.', 'ok'); loadLists(); }
+      catch (err) { toast(err.message, 'bad'); busy(btn, false); }
+    };
+    $$('[data-acc]').forEach(b => b.onclick = () => respond(b.dataset.acc, 'accept', b));
+    $$('[data-rej]').forEach(b => b.onclick = () => respond(b.dataset.rej, 'reject', b));
+    $$('[data-cancel]').forEach(b => b.onclick = async () => {
+      if (!confirm('Cancel this request?')) return;
+      await updateDoc(doc(db, 'swaps', b.dataset.cancel), { status: 'cancelled', updatedAt: serverTimestamp() }); loadLists();
+    });
+  }
+  loadLists();
+</script>
+</body>
+</html>

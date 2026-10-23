@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admin · Staff Portal</title>
+  <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
+  <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/js/config.js"></script>
+</head>
+<body>
+<header id="topbar"></header>
+<div id="loading" class="spinner-page">Loading…</div>
+<main class="wrap" id="main" hidden>
+  <div class="page-head"><div><h1>Admin</h1><p class="sub" id="scopeText">Manage staff, rosters, leave and notification settings.</p></div>
+    <button class="btn ghost sm" id="pushBtn" hidden>Enable notifications on this device</button></div>
+
+  <!-- which company / department you are working on -->
+  <div class="card scope-bar" style="margin-bottom:16px">
+    <div class="row-between">
+      <div class="actions" style="flex:1">
+        <div class="field" id="orgPick" hidden style="margin:0;min-width:220px;flex:1"><label for="orgSel">Company</label><select id="orgSel"></select></div>
+        <div class="field" style="margin:0;min-width:220px;flex:1"><label for="deptSel">Department</label><select id="deptSel"></select></div>
+      </div>
+      <span class="pill admin" id="roleBadge"></span>
+    </div>
+  </div>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab" data-tab="staff">Staff <span class="badge" id="bStaff" hidden></span></button>
+    <button class="tab" data-tab="reports">SL / FRL reports</button>
+    <button class="tab" data-tab="leave">Leave requests <span class="badge" id="bLeave" hidden></span></button>
+    <button class="tab" data-tab="calendar">Leave calendar</button>
+    <button class="tab" data-tab="roster">Duty roster</button>
+    <button class="tab" data-tab="swaps">Duty changes</button>
+    <button class="tab" data-tab="departments" data-role="orgadmin">Departments</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <button class="tab" data-tab="companies" data-role="super">Companies</button>
+  </nav>
+
+  <div class="card need-dept" id="needDept" hidden>
+    <h2>Choose a department</h2>
+    <p class="muted">Rosters and leave calendars are kept per department. Pick one:</p>
+    <div class="actions" id="needDeptBtns"></div>
+  </div>
+
+  <!-- STAFF -->
+  <section data-panel="staff" hidden>
+    <div class="card">
+      <div class="row-between" style="margin-bottom:12px">
+        <h2 style="margin:0">Staff accounts</h2>
+        <div class="actions"><select id="staffFilter" style="width:auto"><option value="">All</option><option value="pending">Pending approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select>
+        <input id="staffSearch" placeholder="Search" style="width:200px"></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Staff ID</th><th>Department</th><th>Level</th><th>Role</th><th>Status</th><th>AL</th><th>Push</th><th></th></tr></thead><tbody id="staffBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- REPORTS -->
+  <section data-panel="reports" hidden>
+    <div class="banner warn">Confidential. Medical certificates and other attachments are never stored in the portal. They were emailed only to the designated SL / FRL recipients set under Settings.</div>
+    <div class="card">
+      <div class="row-between" style="margin-bottom:12px">
+        <h2 style="margin:0">Sick leave &amp; FRL reports</h2>
+        <div class="actions"><select id="repType" style="width:auto"><option value="">All types</option><option>SL</option><option>FRL</option></select>
+        <input type="month" id="repMonth" style="width:auto" title="Filter by month"><input id="repSearch" placeholder="Search staff" style="width:180px"></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Submitted</th><th>Staff</th><th>Type</th><th>Period</th><th>Days</th><th>Reason</th><th>Attachments</th><th>Status</th><th></th></tr></thead><tbody id="repBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- LEAVE -->
+  <section data-panel="leave" hidden>
+    <div class="card">
+      <div class="row-between" style="margin-bottom:12px">
+        <h2 style="margin:0">Annual leave requests</h2>
+        <select id="leaveFilter" style="width:auto"><option value="pending">Pending</option><option value="">All</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Requested</th><th>Staff</th><th>Dates</th><th>Days</th><th>Balance</th><th>Slots</th><th>Note</th><th>Status</th><th></th></tr></thead><tbody id="leaveBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- CALENDAR -->
+  <section data-panel="calendar" data-needs-dept hidden>
+    <div class="grid side">
+      <div class="card">
+        <div class="cal-head">
+          <button class="btn ghost sm" id="calPrev">‹</button><h2 id="calTitle" style="margin:0"></h2><button class="btn ghost sm" id="calNext">›</button>
+        </div>
+        <div class="cal" id="cal"></div>
+        <div id="calLegend"></div>
+        <div id="onLeave" class="small" style="margin-top:12px"></div>
+      </div>
+      <div class="card">
+        <h2>Set leave allocation</h2>
+        <p class="small muted">How many staff of <strong class="deptNameTxt"></strong> may be on annual leave each day. Tap a start and end day on the calendar, or type the dates. Use 0 to block leave.</p>
+        <form id="quotaForm">
+          <div class="row"><div class="field"><label for="qFrom">From</label><input type="date" id="qFrom" required></div>
+          <div class="field"><label for="qTo">To</label><input type="date" id="qTo" required></div></div>
+          <div class="field"><label for="qN">Staff allowed on leave per day</label><input type="number" id="qN" min="0" max="500" value="2" required></div>
+          <label class="check"><input type="checkbox" id="qSkipWe"> Skip weekends</label>
+          <div class="actions" style="margin-top:10px"><button class="btn">Apply</button><button class="btn ghost" type="button" id="qClear">Clear range</button></div>
+        </form>
+        <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+        <form id="defForm">
+          <div class="field"><label for="defQ">Default allocation for <span id="defYear"></span></label><input type="number" id="defQ" min="0" placeholder="Leave empty = not set"><div class="hint">Used for any day without its own allocation.</div></div>
+          <button class="btn ghost">Save default</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROSTER -->
+  <section data-panel="roster" data-needs-dept hidden>
+    <div class="card" style="margin-bottom:16px">
+      <div class="row-between">
+        <div class="actions" style="align-items:center">
+          <label for="rMonth" style="margin:0">Month</label><input type="month" id="rMonth" style="width:auto">
+          <span id="rStatus" class="small muted"></span>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" id="rTemplate">Download template (CSV)</button>
+          <label class="btn ghost" for="rFile" style="margin:0">Upload CSV / Excel</label><input type="file" id="rFile" accept=".csv,.xlsx,.xls" hidden>
+          <button class="btn" id="rSave">Save &amp; publish</button>
+        </div>
+      </div>
+      <label class="check" style="margin-top:12px"><input type="checkbox" id="rNotify" checked> Notify staff whose duties changed (email + push)</label>
+      <div id="rMsg" class="small"></div>
+    </div>
+    <div class="card">
+      <p class="small muted" style="margin-top:0">Roster for <strong class="deptNameTxt"></strong>. Type shift codes straight into the grid (e.g. M, E, N, OFF). Changed cells are highlighted until you save. Shift code meanings are set under Settings.</p>
+      <div class="table-wrap"><table class="roster" id="rGrid"></table></div>
+    </div>
+  </section>
+
+  <!-- SWAPS -->
+  <section data-panel="swaps" hidden>
+    <div class="card">
+      <div class="row-between" style="margin-bottom:12px"><h2 style="margin:0">Duty change requests</h2>
+        <select id="swFilter" style="width:auto"><option value="">All</option><option value="pending">Pending</option><option value="accepted">Accepted</option><option value="rejected">Declined</option><option value="cancelled">Cancelled</option></select></div>
+      <div class="table-wrap"><table><thead><tr><th>Requested</th><th>From</th><th>With</th><th>Department</th><th>Duties</th><th>Reason</th><th>Status</th><th>Roster</th><th></th></tr></thead><tbody id="swBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- DEPARTMENTS (company admin) -->
+  <section data-panel="departments" hidden>
+    <div class="grid side">
+      <div class="card">
+        <h2>Departments</h2>
+        <div class="table-wrap"><table><thead><tr><th>Department</th><th>Staff</th><th>Status</th><th></th></tr></thead><tbody id="deptBody"></tbody></table></div>
+      </div>
+      <div class="card">
+        <h2>Add a department</h2>
+        <form id="deptForm">
+          <div class="field"><label for="newDept">Department name</label><input id="newDept" required placeholder="e.g. Front Office"></div>
+          <button class="btn">Add department</button>
+        </form>
+        <p class="small muted">New departments appear on the registration page straight away. Each department can have its own email lists, admins, roster and leave calendar.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section data-panel="settings" hidden>
+    <div class="card" id="inviteCard" style="margin-bottom:16px">
+      <h2>Invite staff</h2>
+      <p class="small muted" style="margin-top:0">Staff register with this company code, or with the link (the code is filled in for them).</p>
+      <div class="row-between">
+        <div><div class="small muted" style="font-weight:700">Company code</div><div style="font-size:24px;font-weight:800;letter-spacing:.06em" id="inviteCode">—</div></div>
+        <div class="actions"><input id="inviteLink" readonly style="min-width:260px"><button type="button" class="btn ghost" id="copyLink">Copy link</button></div>
+      </div>
+    </div>
+
+    <div class="grid g2" data-role="orgadmin">
+      <form class="card" id="orgForm">
+        <h2>Company details</h2>
+        <div class="row"><div class="field"><label for="oName">Company name</label><input id="oName" required></div>
+          <div class="field"><label for="oShort">Short name <span class="muted" style="font-weight:500">(top bar)</span></label><input id="oShort" maxlength="24"></div></div>
+        <div class="row"><div class="field"><label for="oEmail">Contact email</label><input id="oEmail" type="email"></div>
+          <div class="field"><label for="oPhone">Contact phone</label><input id="oPhone"></div></div>
+        <div class="field"><label for="oAddr">Address</label><input id="oAddr"></div>
+        <div class="row"><div class="field"><label for="oCode">Company code</label><input id="oCode" required pattern="[A-Za-z0-9]{4,16}" title="4–16 letters or numbers" style="text-transform:uppercase"><div class="hint">Changing it stops the old code working.</div></div>
+          <div class="field"><label for="oAL">Default annual leave (days)</label><input id="oAL" type="number" min="0" max="365"></div></div>
+        <div class="field"><label>Weekend days</label><div class="actions" id="oWeekend"></div></div>
+        <div class="field"><label for="oLegend">Shift codes (whole company)</label><textarea id="oLegend" style="min-height:120px" placeholder="M = Morning 06:00–14:00&#10;E = Evening 14:00–22:00&#10;N = Night 22:00–06:00&#10;OFF = Day off"></textarea><div class="hint">One per line as <code>CODE = meaning</code>. Departments can add their own below.</div></div>
+        <button class="btn" id="orgSave">Save company details</button>
+      </form>
+
+      <form class="card" id="orgMailForm">
+        <h2>Company email lists</h2>
+        <p class="small muted" style="margin-top:0">These addresses receive emails from <strong>every department</strong>. One email per line.</p>
+        <div class="field"><label for="o_slEmails">Sick Leave (SL) — full report + certificate</label><textarea id="o_slEmails" placeholder="hr@company.mv"></textarea></div>
+        <div class="field"><label for="o_frlEmails">FRL — full report + attachments</label><textarea id="o_frlEmails"></textarea></div>
+        <div class="field"><label for="o_leaveEmails">Annual leave requests</label><textarea id="o_leaveEmails"></textarea></div>
+        <div class="field"><label for="o_swapEmails">Duty changes</label><textarea id="o_swapEmails"></textarea></div>
+        <label class="check"><input type="checkbox" id="emailAdmins"> Email admins too (company admins + that department's admins). For SL/FRL they get a short notice only, with no reason and no attachment.</label>
+        <label class="check"><input type="checkbox" id="pushAdmins"> Push notifications to admins</label>
+        <button class="btn" id="orgMailSave" style="margin-top:10px">Save company emails</button>
+      </form>
+    </div>
+
+    <form class="card" id="deptSetForm">
+      <h2>Department settings · <span class="deptNameTxt"></span></h2>
+      <p class="small muted" style="margin-top:0" id="deptSetHint">These addresses receive emails from <strong>this department only</strong>, in addition to the company lists. One email per line.</p>
+      <div class="grid g2" style="margin:0">
+        <div>
+          <div class="field"><label for="d_slEmails">Sick Leave (SL) — full report + certificate</label><textarea id="d_slEmails" placeholder="manager@company.mv"></textarea></div>
+          <div class="field"><label for="d_frlEmails">FRL — full report + attachments</label><textarea id="d_frlEmails"></textarea></div>
+        </div>
+        <div>
+          <div class="field"><label for="d_leaveEmails">Annual leave requests</label><textarea id="d_leaveEmails"></textarea></div>
+          <div class="field"><label for="d_swapEmails">Duty changes</label><textarea id="d_swapEmails"></textarea></div>
+        </div>
+      </div>
+      <div class="field"><label for="d_legend">Extra shift codes for this department</label><textarea id="d_legend" placeholder="T = Training 09:00–17:00"></textarea><div class="hint">Added to (or overriding) the company shift codes.</div></div>
+      <div class="actions"><button class="btn" id="deptSetSave">Save department settings</button></div>
+    </form>
+    <div class="card" id="deptSetPick" hidden><p class="muted" style="margin:0">Choose a department at the top to set that department's own email lists and shift codes.</p></div>
+
+    <div class="card">
+      <h2>Test</h2>
+      <p class="small muted" style="margin-top:0">Sends a test email and push notification to you (<span id="meEmail"></span>). The email lists who receives each type of email for the current company / department.</p>
+      <button type="button" class="btn ghost" id="testBtn">Send test notification</button>
+    </div>
+  </section>
+
+  <!-- COMPANIES (platform owner) -->
+  <section data-panel="companies" hidden>
+    <div class="grid side">
+      <div class="card">
+        <h2>Companies</h2>
+        <div class="table-wrap"><table><thead><tr><th>Company</th><th>Code</th><th>Status</th><th></th></tr></thead><tbody id="orgBody"></tbody></table></div>
+      </div>
+      <form class="card" id="newOrgForm">
+        <h2>Add a company</h2>
+        <div class="field"><label for="nName">Company name</label><input id="nName" required placeholder="e.g. Koveli Resort"></div>
+        <div class="field"><label for="nCode">Company code</label><input id="nCode" required pattern="[A-Za-z0-9]{4,16}" title="4–16 letters or numbers" style="text-transform:uppercase"><div class="hint">Staff type this when registering. Letters and numbers only.</div></div>
+        <div class="field"><label for="nDepts">Departments</label><textarea id="nDepts" placeholder="Front Office&#10;Housekeeping&#10;Kitchen">General</textarea><div class="hint">One per line. More can be added later.</div></div>
+        <button class="btn" id="newOrgBtn">Create company</button>
+        <p class="small muted">Next: give the company code to their HR person. When they register, open the company, approve them in <strong>Staff</strong> and set their role to <strong>Company admin</strong>.</p>
+      </form>
+    </div>
+  </section>
+</main>
+
+<dialog id="staffDlg">
+  <form id="staffForm" method="dialog">
+    <div class="dlg-body">
+      <h2 id="dlgTitle">Edit staff</h2>
+      <div class="row"><div class="field"><label for="fName">Full name</label><input id="fName" required></div>
+        <div class="field"><label for="fStaffId">Staff ID</label><input id="fStaffId" required></div></div>
+      <div class="row"><div class="field"><label for="fDept">Department</label><select id="fDept" required></select></div>
+        <div class="field"><label for="fDesig">Designation</label><input id="fDesig"></div></div>
+      <div class="row"><div class="field"><label for="fLevel">Duty level / grade</label><input id="fLevel" list="levels" placeholder="e.g. Level 2"><datalist id="levels"></datalist><div class="hint">Staff can only swap duties with others in the same department at the same level.</div></div>
+        <div class="field"><label for="fPhone">Mobile</label><input id="fPhone"></div></div>
+      <div class="row r3"><div class="field"><label for="fRole">Role</label><select id="fRole"></select></div>
+        <div class="field"><label for="fStatus">Status</label><select id="fStatus"><option value="pending">Pending</option><option value="active">Active</option><option value="disabled">Disabled</option></select></div>
+        <div class="field"><label for="fEnt">AL entitlement</label><input id="fEnt" type="number" min="0"></div></div>
+      <div class="row r3"><div class="field"><label for="fTaken">AL taken</label><input id="fTaken" type="number" min="0"></div></div>
+      <p class="small muted" id="fRoleHint" style="margin:0 0 6px"></p>
+      <p class="small muted" id="fEmail" style="margin:0"></p>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="dlgCancel">Cancel</button><button class="btn" id="dlgSave" value="save">Save</button></div>
+  </form>
+</dialog>
+
+<script type="module" src="/js/admin.js"></script>
+</body>
+</html>
