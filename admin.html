@@ -129,6 +129,7 @@
       </div>
       <div class="banner" id="rDraftBanner" hidden style="margin:12px 0 0"></div>
       <div class="actions" style="margin-top:12px">
+        <button class="btn ghost sm" id="rShiftRules">⚙ Shifts &amp; rules</button>
         <button class="btn ghost sm" id="rPattern">🔁 Pattern fill</button>
         <button class="btn ghost sm" id="rCopyPrev">📋 Copy previous month</button>
         <button class="btn sm accent" id="rAuto" title="Builds the roster automatically from your rules — free, runs on this device">⚡ Auto-roster</button>
@@ -147,7 +148,7 @@
         <div class="palette" id="palette"></div>
         <div class="custom-time" id="customTime" hidden>
           <label class="small" style="margin:0">Custom time</label>
-          <input type="time" id="ctStart" value="09:00" style="width:auto"> – <input type="time" id="ctEnd" value="17:00" style="width:auto">
+          <select id="ctStart" class="time-sel"></select> – <select id="ctEnd" class="time-sel"></select>
           <span class="small muted">Paint to apply</span>
         </div>
       </div>
@@ -227,15 +228,14 @@
       </form>
     </div>
 
-    <div class="card" data-role="orgadmin">
-      <h2>Shifts &amp; timings · whole company</h2>
-      <p class="small muted" style="margin-top:0">Shifts every unit can use in its roster. Units can add their own below. Night shifts can end the next morning (e.g. 22:00 → 06:00).</p>
-      <div id="orgShifts"></div>
-      <div class="actions" style="margin-top:10px"><button type="button" class="btn" id="orgShiftSave">Save company shifts</button></div>
+    <div class="card">
+      <h2>Shifts, timings &amp; roster rules</h2>
+      <p class="small muted" style="margin-top:0">Set shift start and end times (company-wide and per unit) and the roster rules for each unit in one place. The same window opens from <strong>Duty roster → ⚙ Shifts &amp; rules</strong>.</p>
+      <button type="button" class="btn" id="openShiftRules">⚙ Open shifts &amp; rules</button>
     </div>
 
     <div id="unitSettings">
-      <div class="grid g2">
+      <div>
         <form class="card" id="deptSetForm">
           <h2>Unit email lists · <span class="deptNameTxt"></span></h2>
           <p class="small muted" style="margin-top:0">These addresses receive emails from <strong>this unit only</strong>, in addition to the company lists. One email per line.</p>
@@ -246,31 +246,9 @@
           <button class="btn" id="deptSetSave">Save unit emails</button>
         </form>
 
-        <form class="card" id="rulesForm">
-          <h2>Roster rules · <span class="deptNameTxt"></span></h2>
-          <p class="small muted" style="margin-top:0">The roster editor checks these and highlights anything that breaks them. The AI assistant follows them too. Leave a box empty to switch a rule off.</p>
-          <div class="row">
-            <div class="field"><label for="ruMaxConsec">Max working days in a row</label><input id="ruMaxConsec" type="number" min="1" max="31" placeholder="e.g. 6"></div>
-            <div class="field"><label for="ruMinRest">Min rest between shifts (hours)</label><input id="ruMinRest" type="number" min="0" max="48" placeholder="e.g. 11"></div>
-          </div>
-          <div class="row">
-            <div class="field"><label for="ruMaxWeek">Max hours in any 7 days</label><input id="ruMaxWeek" type="number" min="1" max="168" placeholder="e.g. 48"></div>
-            <div class="field"><label for="ruMinOff">Min days off per week (Mon–Sun)</label><input id="ruMinOff" type="number" min="0" max="7" placeholder="e.g. 1"></div>
-          </div>
-          <div class="field"><label>Minimum staff on each shift, every day</label><div class="min-staff" id="ruMinStaff"></div><div class="hint">Shown as the coverage rows under the roster.</div></div>
-          <div class="field"><label for="ruNotes">Other rules / preferences <span class="muted" style="font-weight:500">(for the AI assistant)</span></label><textarea id="ruNotes" placeholder="e.g. Seniors (L3) should be spread across shifts. Nobody does more than 2 nights in a row. Fridays need 1 extra on Evening."></textarea></div>
-          <button class="btn" id="rulesSave">Save rules</button>
-        </form>
-      </div>
-
-      <div class="card">
-        <h2>Unit shifts · <span class="deptNameTxt"></span></h2>
-        <p class="small muted" style="margin-top:0">Extra shifts for this unit only. A code that also exists for the company replaces the company version in this unit.</p>
-        <div id="unitShifts"></div>
-        <div class="actions" style="margin-top:10px"><button type="button" class="btn" id="unitShiftSave">Save unit shifts</button></div>
       </div>
     </div>
-    <div class="card" id="deptSetPick" hidden><p class="muted" style="margin:0">Choose a unit at the top to set that unit's own email lists, shifts and roster rules.</p></div>
+    <div class="card" id="deptSetPick" hidden><p class="muted" style="margin:0">Choose a unit at the top to set that unit's own email lists.</p></div>
 
     <div class="card">
       <h2>Test &amp; device data</h2>
@@ -321,6 +299,45 @@
     </div>
     <div class="dlg-foot"><button type="button" class="btn ghost" id="dlgCancel">Cancel</button><button class="btn" id="dlgSave" value="save">Save</button></div>
   </form>
+</dialog>
+
+<!-- shifts, timings & roster rules -->
+<dialog id="srDlg" class="wide-dlg">
+  <div class="dlg-body">
+    <div class="row-between"><h2 style="margin:0">⚙ Shifts, timings &amp; roster rules</h2><button type="button" class="btn ghost sm" id="srClose">Close</button></div>
+
+    <section class="sr-sec" id="srOrg" data-role="orgadmin">
+      <h3>Company shifts <span class="muted small">(every unit can use these)</span></h3>
+      <p class="small muted" style="margin-top:0">Pick start and end times from the lists. A night shift can end the next morning, e.g. 22:00 → 06:00. Tick “Day off / leave” for codes like OFF, AL, SL.</p>
+      <div id="orgShifts"></div>
+      <div class="actions" style="margin-top:10px"><button type="button" class="btn" id="orgShiftSave">Save company shifts</button></div>
+    </section>
+
+    <div id="srNoUnit" class="banner" hidden>Choose a unit at the top of the Admin page to set that unit's own shifts and roster rules.</div>
+
+    <section class="sr-sec" id="srUnit">
+      <h3>Extra shifts for <span class="deptNameTxt"></span></h3>
+      <p class="small muted" style="margin-top:0">Only this unit sees these. Using the same code as a company shift (e.g. M) changes that shift's times for this unit only.</p>
+      <div id="unitShifts"></div>
+      <div class="actions" style="margin-top:10px"><button type="button" class="btn" id="unitShiftSave">Save unit shifts</button></div>
+    </section>
+
+    <form class="sr-sec" id="rulesForm">
+      <h3>Roster rules for <span class="deptNameTxt"></span></h3>
+      <p class="small muted" style="margin-top:0">The roster editor checks these, highlights anything that breaks them, and ⚡ Auto-roster follows them. Choose “No rule” to switch one off.</p>
+      <div class="row">
+        <div class="field"><label for="ruMaxConsec">Max working days in a row</label><select id="ruMaxConsec"></select></div>
+        <div class="field"><label for="ruMinRest">Min rest between shifts</label><select id="ruMinRest"></select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label for="ruMaxWeek">Max hours in any 7 days</label><select id="ruMaxWeek"></select></div>
+        <div class="field"><label for="ruMinOff">Min days off per week (Mon–Sun)</label><select id="ruMinOff"></select></div>
+      </div>
+      <div class="field"><label>Minimum staff on each shift, every day</label><div class="min-staff" id="ruMinStaff"></div><div class="hint">Shown as the coverage rows under the roster. Save the shifts first if you just added one.</div></div>
+      <div class="field"><label for="ruNotes">Other rules / preferences <span class="muted" style="font-weight:500">(notes for admins and the optional AI)</span></label><textarea id="ruNotes" placeholder="e.g. Seniors (L3) spread across shifts. Max 2 nights in a row. Fridays need 1 extra on Evening."></textarea></div>
+      <button class="btn" id="rulesSave">Save rules</button>
+    </form>
+  </div>
 </dialog>
 
 <!-- roster: pick a shift for one cell -->
