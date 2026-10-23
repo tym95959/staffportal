@@ -2,7 +2,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import { getAuth, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
-  getFirestore, doc, getDoc, getDocs, updateDoc, collection, query, where, orderBy, limit,
+  initializeFirestore, doc, getDoc, getDocs, updateDoc, collection, query, where, orderBy, limit,
   onSnapshot, writeBatch, arrayUnion, serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { idb } from '/js/store.js';
@@ -21,7 +21,8 @@ if (!self.FIREBASE_CONFIG || !self.FIREBASE_CONFIG.apiKey) {
 
 export const app = initializeApp(self.FIREBASE_CONFIG);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// ignoreUndefinedProperties: an empty optional field never blocks a save
+export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
 export const APP_NAME = self.APP_NAME || 'Staff Portal';
 
 /* ---------------- small helpers ---------------- */
@@ -156,8 +157,14 @@ export async function shiftOn(uid, date) {
   return r?.rows?.[uid]?.[Number(date.slice(8)) - 1] || '';
 }
 export const shiftLabel = (code, legend = {}) => code ? (legend[code] ? `${code} – ${legend[code]}` : isCustomTime(code) ? `Custom ${code.replace('-', '–')}` : code) : 'Not rostered';
-/** short text for a cell: shift code, or "9–17" for a custom time */
-export const cellText = code => isCustomTime(code) ? code.replace(/^0?(\d+):(\d\d)-0?(\d+):(\d\d)$/, (m, a, b, c, d) => `${a}${b !== '00' ? ':' + b : ''}–${c}${d !== '00' ? ':' + d : ''}`) : (code || '');
+/** text shown in a roster cell: the START TIME of a working shift (0830, 1530…); day-off codes (OFF, AL…) as they are */
+export function cellText(code, shifts) {
+  code = String(code || ''); if (!code) return '';
+  if (isCustomTime(code)) return code.slice(0, 5).replace(':', '');
+  const s = shifts?.[code.toUpperCase()];
+  if (s && !s.off && s.start) return s.start.replace(':', '');
+  return code;
+}
 const toMin = t => { const [h, m] = String(t || '').split(':').map(Number); return Number.isFinite(h) ? h * 60 + (m || 0) : null; };
 /** start/end minutes (end may be > 1440 for overnight) and hours of a code, or null for day off / unknown */
 export function shiftSpan(code, shifts = {}) {
@@ -343,6 +350,7 @@ export function requireUser({ admin = false } = {}) {
       let profile = await cachedDoc(doc(db, 'users', user.uid)).catch(() => null);
       // not approved yet / disabled → always ask Firebase, so approval shows up immediately
       if (!profile || profile.status !== 'active') profile = await cachedDoc(doc(db, 'users', user.uid), { fresh: true }).catch(() => null);
+      if (profile && !profile.name) profile.name = profile.email || user.email || 'Admin'; // e.g. an App admin record made by hand
       if (!profile || profile.status !== 'active') {
         renderNav(null);
         const main = $('#main'); main.hidden = false; $('#loading')?.remove();
