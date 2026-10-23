@@ -11,16 +11,16 @@
 <body>
 <header id="topbar"></header>
 <div id="loading" class="spinner-page">Loading…</div>
-<main class="wrap" id="main" hidden>
+<main class="wrap wide" id="main" hidden>
   <div class="page-head"><div><h1>Admin</h1><p class="sub" id="scopeText">Manage staff, rosters, leave and notification settings.</p></div>
     <button class="btn ghost sm" id="pushBtn" hidden>Enable notifications on this device</button></div>
 
-  <!-- which company / department you are working on -->
+  <!-- which company / unit you are working on -->
   <div class="card scope-bar" style="margin-bottom:16px">
     <div class="row-between">
       <div class="actions" style="flex:1">
         <div class="field" id="orgPick" hidden style="margin:0;min-width:220px;flex:1"><label for="orgSel">Company</label><select id="orgSel"></select></div>
-        <div class="field" style="margin:0;min-width:220px;flex:1"><label for="deptSel">Department</label><select id="deptSel"></select></div>
+        <div class="field" style="margin:0;min-width:220px;flex:1"><label for="deptSel">Unit</label><select id="deptSel"></select></div>
       </div>
       <span class="pill admin" id="roleBadge"></span>
     </div>
@@ -33,14 +33,14 @@
     <button class="tab" data-tab="calendar">Leave calendar</button>
     <button class="tab" data-tab="roster">Duty roster</button>
     <button class="tab" data-tab="swaps">Duty changes</button>
-    <button class="tab" data-tab="departments" data-role="orgadmin">Departments</button>
+    <button class="tab" data-tab="departments" data-role="orgadmin">Units</button>
     <button class="tab" data-tab="settings">Settings</button>
     <button class="tab" data-tab="companies" data-role="super">Companies</button>
   </nav>
 
   <div class="card need-dept" id="needDept" hidden>
-    <h2>Choose a department</h2>
-    <p class="muted">Rosters and leave calendars are kept per department. Pick one:</p>
+    <h2>Choose a unit</h2>
+    <p class="muted">Rosters and leave calendars are kept per unit. Pick one:</p>
     <div class="actions" id="needDeptBtns"></div>
   </div>
 
@@ -52,7 +52,7 @@
         <div class="actions"><select id="staffFilter" style="width:auto"><option value="">All</option><option value="pending">Pending approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select>
         <input id="staffSearch" placeholder="Search" style="width:200px"></div>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Staff ID</th><th>Department</th><th>Level</th><th>Role</th><th>Status</th><th>AL</th><th>Push</th><th></th></tr></thead><tbody id="staffBody"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Staff ID</th><th>Unit</th><th>Level</th><th>Role</th><th>Status</th><th>AL</th><th>Push</th><th></th></tr></thead><tbody id="staffBody"></tbody></table></div>
     </div>
   </section>
 
@@ -110,26 +110,54 @@
     </div>
   </section>
 
-  <!-- ROSTER -->
+  <!-- ROSTER EDITOR -->
   <section data-panel="roster" data-needs-dept hidden>
-    <div class="card" style="margin-bottom:16px">
+    <div class="card roster-bar">
       <div class="row-between">
-        <div class="actions" style="align-items:center">
-          <label for="rMonth" style="margin:0">Month</label><input type="month" id="rMonth" style="width:auto">
-          <span id="rStatus" class="small muted"></span>
+        <div class="actions">
+          <button class="btn ghost sm" id="rPrev" aria-label="Previous month">‹</button>
+          <input type="month" id="rMonth" style="width:auto">
+          <button class="btn ghost sm" id="rNext" aria-label="Next month">›</button>
+          <span id="rStatus" class="small"></span>
         </div>
         <div class="actions">
-          <button class="btn ghost" id="rTemplate">Download template (CSV)</button>
-          <label class="btn ghost" for="rFile" style="margin:0">Upload CSV / Excel</label><input type="file" id="rFile" accept=".csv,.xlsx,.xls" hidden>
-          <button class="btn" id="rSave">Save &amp; publish</button>
+          <button class="btn ghost sm" id="rUndo" disabled title="Undo (Ctrl+Z)">↶ Undo</button>
+          <button class="btn ghost sm" id="rLoadFb" title="Replace the grid with the version published in Firebase">⤓ Load from Firebase</button>
+          <button class="btn ghost sm" id="rSaveDraft" title="Keep this version on this device only (also saved automatically)">💾 Save draft on device</button>
+          <button class="btn sm" id="rSave" title="Upload to Firebase so staff can see it">⤒ Publish to Firebase</button>
         </div>
       </div>
-      <label class="check" style="margin-top:12px"><input type="checkbox" id="rNotify" checked> Notify staff whose duties changed (email + push)</label>
-      <div id="rMsg" class="small"></div>
+      <div class="banner" id="rDraftBanner" hidden style="margin:12px 0 0"></div>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn ghost sm" id="rPattern">🔁 Pattern fill</button>
+        <button class="btn ghost sm" id="rCopyPrev">📋 Copy previous month</button>
+        <button class="btn sm accent" id="rAuto" title="Builds the roster automatically from your rules — free, runs on this device">⚡ Auto-roster</button>
+        <button class="btn ghost sm" id="rAi" hidden>✨ AI assistant</button>
+        <button class="btn ghost sm" id="rClear">🧹 Clear month</button>
+        <button class="btn ghost sm" id="rTemplate">CSV template</button>
+        <label class="btn ghost sm" for="rFile" style="margin:0">Upload CSV / Excel</label><input type="file" id="rFile" accept=".csv,.xlsx,.xls" hidden>
+        <label class="check" style="margin:0 0 0 auto"><input type="checkbox" id="rNotify" checked> Notify staff whose duties changed</label>
+      </div>
+      <div id="rMsg" class="small" style="margin-top:6px"></div>
     </div>
+
     <div class="card">
-      <p class="small muted" style="margin-top:0">Roster for <strong class="deptNameTxt"></strong>. Type shift codes straight into the grid (e.g. M, E, N, OFF). Changed cells are highlighted until you save. Shift code meanings are set under Settings.</p>
-      <div class="table-wrap"><table class="roster" id="rGrid"></table></div>
+      <div class="palette-wrap">
+        <div class="small muted" style="font-weight:700;margin-bottom:6px">Paint with — choose a shift, then tap or drag across cells. Choose “Pick” to tap a cell and pick from a list.</div>
+        <div class="palette" id="palette"></div>
+        <div class="custom-time" id="customTime" hidden>
+          <label class="small" style="margin:0">Custom time</label>
+          <input type="time" id="ctStart" value="09:00" style="width:auto"> – <input type="time" id="ctEnd" value="17:00" style="width:auto">
+          <span class="small muted">Paint to apply</span>
+        </div>
+      </div>
+      <div class="table-wrap roster-scroll"><table class="roster editor" id="rGrid"></table></div>
+      <div class="legend" id="rLegend"></div>
+    </div>
+
+    <div class="card" id="rWarnCard">
+      <div class="row-between"><h2 style="margin:0">Rule check</h2><span class="small muted" id="rRulesTxt"></span></div>
+      <div id="rWarnings" class="small" style="margin-top:10px"></div>
     </div>
   </section>
 
@@ -138,24 +166,24 @@
     <div class="card">
       <div class="row-between" style="margin-bottom:12px"><h2 style="margin:0">Duty change requests</h2>
         <select id="swFilter" style="width:auto"><option value="">All</option><option value="pending">Pending</option><option value="accepted">Accepted</option><option value="rejected">Declined</option><option value="cancelled">Cancelled</option></select></div>
-      <div class="table-wrap"><table><thead><tr><th>Requested</th><th>From</th><th>With</th><th>Department</th><th>Duties</th><th>Reason</th><th>Status</th><th>Roster</th><th></th></tr></thead><tbody id="swBody"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Requested</th><th>From</th><th>With</th><th>Unit</th><th>Duties</th><th>Reason</th><th>Status</th><th>Roster</th><th></th></tr></thead><tbody id="swBody"></tbody></table></div>
     </div>
   </section>
 
-  <!-- DEPARTMENTS (company admin) -->
+  <!-- UNITS (company admin) -->
   <section data-panel="departments" hidden>
     <div class="grid side">
       <div class="card">
-        <h2>Departments</h2>
-        <div class="table-wrap"><table><thead><tr><th>Department</th><th>Staff</th><th>Status</th><th></th></tr></thead><tbody id="deptBody"></tbody></table></div>
+        <h2>Units</h2>
+        <div class="table-wrap"><table><thead><tr><th>Unit</th><th>Staff</th><th>Status</th><th></th></tr></thead><tbody id="deptBody"></tbody></table></div>
       </div>
       <div class="card">
-        <h2>Add a department</h2>
+        <h2>Add a unit</h2>
         <form id="deptForm">
-          <div class="field"><label for="newDept">Department name</label><input id="newDept" required placeholder="e.g. Front Office"></div>
-          <button class="btn">Add department</button>
+          <div class="field"><label for="newDept">Unit name</label><input id="newDept" required placeholder="e.g. Front Office"></div>
+          <button class="btn">Add unit</button>
         </form>
-        <p class="small muted">New departments appear on the registration page straight away. Each department can have its own email lists, admins, roster and leave calendar.</p>
+        <p class="small muted">New units appear on the registration page straight away. Each unit has its own staff, unit admins, email lists, shifts, roster rules, roster and leave calendar.</p>
       </div>
     </div>
   </section>
@@ -169,6 +197,7 @@
         <div><div class="small muted" style="font-weight:700">Company code</div><div style="font-size:24px;font-weight:800;letter-spacing:.06em" id="inviteCode">—</div></div>
         <div class="actions"><input id="inviteLink" readonly style="min-width:260px"><button type="button" class="btn ghost" id="copyLink">Copy link</button></div>
       </div>
+      <p class="small" id="aiStatus" style="margin:12px 0 0"></p>
     </div>
 
     <div class="grid g2" data-role="orgadmin">
@@ -182,85 +211,189 @@
         <div class="row"><div class="field"><label for="oCode">Company code</label><input id="oCode" required pattern="[A-Za-z0-9]{4,16}" title="4–16 letters or numbers" style="text-transform:uppercase"><div class="hint">Changing it stops the old code working.</div></div>
           <div class="field"><label for="oAL">Default annual leave (days)</label><input id="oAL" type="number" min="0" max="365"></div></div>
         <div class="field"><label>Weekend days</label><div class="actions" id="oWeekend"></div></div>
-        <div class="field"><label for="oLegend">Shift codes (whole company)</label><textarea id="oLegend" style="min-height:120px" placeholder="M = Morning 06:00–14:00&#10;E = Evening 14:00–22:00&#10;N = Night 22:00–06:00&#10;OFF = Day off"></textarea><div class="hint">One per line as <code>CODE = meaning</code>. Departments can add their own below.</div></div>
         <button class="btn" id="orgSave">Save company details</button>
       </form>
 
       <form class="card" id="orgMailForm">
         <h2>Company email lists</h2>
-        <p class="small muted" style="margin-top:0">These addresses receive emails from <strong>every department</strong>. One email per line.</p>
+        <p class="small muted" style="margin-top:0">These addresses receive emails from <strong>every unit</strong>. One email per line.</p>
         <div class="field"><label for="o_slEmails">Sick Leave (SL) — full report + certificate</label><textarea id="o_slEmails" placeholder="hr@company.mv"></textarea></div>
         <div class="field"><label for="o_frlEmails">FRL — full report + attachments</label><textarea id="o_frlEmails"></textarea></div>
         <div class="field"><label for="o_leaveEmails">Annual leave requests</label><textarea id="o_leaveEmails"></textarea></div>
         <div class="field"><label for="o_swapEmails">Duty changes</label><textarea id="o_swapEmails"></textarea></div>
-        <label class="check"><input type="checkbox" id="emailAdmins"> Email admins too (company admins + that department's admins). For SL/FRL they get a short notice only, with no reason and no attachment.</label>
+        <label class="check"><input type="checkbox" id="emailAdmins"> Email admins too (company admins + that unit's admins). For SL/FRL they get a short notice only, with no reason and no attachment.</label>
         <label class="check"><input type="checkbox" id="pushAdmins"> Push notifications to admins</label>
         <button class="btn" id="orgMailSave" style="margin-top:10px">Save company emails</button>
       </form>
     </div>
 
-    <form class="card" id="deptSetForm">
-      <h2>Department settings · <span class="deptNameTxt"></span></h2>
-      <p class="small muted" style="margin-top:0" id="deptSetHint">These addresses receive emails from <strong>this department only</strong>, in addition to the company lists. One email per line.</p>
-      <div class="grid g2" style="margin:0">
-        <div>
+    <div class="card" data-role="orgadmin">
+      <h2>Shifts &amp; timings · whole company</h2>
+      <p class="small muted" style="margin-top:0">Shifts every unit can use in its roster. Units can add their own below. Night shifts can end the next morning (e.g. 22:00 → 06:00).</p>
+      <div id="orgShifts"></div>
+      <div class="actions" style="margin-top:10px"><button type="button" class="btn" id="orgShiftSave">Save company shifts</button></div>
+    </div>
+
+    <div id="unitSettings">
+      <div class="grid g2">
+        <form class="card" id="deptSetForm">
+          <h2>Unit email lists · <span class="deptNameTxt"></span></h2>
+          <p class="small muted" style="margin-top:0">These addresses receive emails from <strong>this unit only</strong>, in addition to the company lists. One email per line.</p>
           <div class="field"><label for="d_slEmails">Sick Leave (SL) — full report + certificate</label><textarea id="d_slEmails" placeholder="manager@company.mv"></textarea></div>
           <div class="field"><label for="d_frlEmails">FRL — full report + attachments</label><textarea id="d_frlEmails"></textarea></div>
-        </div>
-        <div>
           <div class="field"><label for="d_leaveEmails">Annual leave requests</label><textarea id="d_leaveEmails"></textarea></div>
           <div class="field"><label for="d_swapEmails">Duty changes</label><textarea id="d_swapEmails"></textarea></div>
-        </div>
+          <button class="btn" id="deptSetSave">Save unit emails</button>
+        </form>
+
+        <form class="card" id="rulesForm">
+          <h2>Roster rules · <span class="deptNameTxt"></span></h2>
+          <p class="small muted" style="margin-top:0">The roster editor checks these and highlights anything that breaks them. The AI assistant follows them too. Leave a box empty to switch a rule off.</p>
+          <div class="row">
+            <div class="field"><label for="ruMaxConsec">Max working days in a row</label><input id="ruMaxConsec" type="number" min="1" max="31" placeholder="e.g. 6"></div>
+            <div class="field"><label for="ruMinRest">Min rest between shifts (hours)</label><input id="ruMinRest" type="number" min="0" max="48" placeholder="e.g. 11"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label for="ruMaxWeek">Max hours in any 7 days</label><input id="ruMaxWeek" type="number" min="1" max="168" placeholder="e.g. 48"></div>
+            <div class="field"><label for="ruMinOff">Min days off per week (Mon–Sun)</label><input id="ruMinOff" type="number" min="0" max="7" placeholder="e.g. 1"></div>
+          </div>
+          <div class="field"><label>Minimum staff on each shift, every day</label><div class="min-staff" id="ruMinStaff"></div><div class="hint">Shown as the coverage rows under the roster.</div></div>
+          <div class="field"><label for="ruNotes">Other rules / preferences <span class="muted" style="font-weight:500">(for the AI assistant)</span></label><textarea id="ruNotes" placeholder="e.g. Seniors (L3) should be spread across shifts. Nobody does more than 2 nights in a row. Fridays need 1 extra on Evening."></textarea></div>
+          <button class="btn" id="rulesSave">Save rules</button>
+        </form>
       </div>
-      <div class="field"><label for="d_legend">Extra shift codes for this department</label><textarea id="d_legend" placeholder="T = Training 09:00–17:00"></textarea><div class="hint">Added to (or overriding) the company shift codes.</div></div>
-      <div class="actions"><button class="btn" id="deptSetSave">Save department settings</button></div>
-    </form>
-    <div class="card" id="deptSetPick" hidden><p class="muted" style="margin:0">Choose a department at the top to set that department's own email lists and shift codes.</p></div>
+
+      <div class="card">
+        <h2>Unit shifts · <span class="deptNameTxt"></span></h2>
+        <p class="small muted" style="margin-top:0">Extra shifts for this unit only. A code that also exists for the company replaces the company version in this unit.</p>
+        <div id="unitShifts"></div>
+        <div class="actions" style="margin-top:10px"><button type="button" class="btn" id="unitShiftSave">Save unit shifts</button></div>
+      </div>
+    </div>
+    <div class="card" id="deptSetPick" hidden><p class="muted" style="margin:0">Choose a unit at the top to set that unit's own email lists, shifts and roster rules.</p></div>
 
     <div class="card">
-      <h2>Test</h2>
-      <p class="small muted" style="margin-top:0">Sends a test email and push notification to you (<span id="meEmail"></span>). The email lists who receives each type of email for the current company / department.</p>
-      <button type="button" class="btn ghost" id="testBtn">Send test notification</button>
+      <h2>Test &amp; device data</h2>
+      <p class="small muted" style="margin-top:0">Sends a test email and push notification to you (<span id="meEmail"></span>). The email lists who receives each type of email for the current company / unit.</p>
+      <div class="actions"><button type="button" class="btn ghost" id="testBtn">Send test notification</button>
+        <button type="button" class="btn ghost" id="clearCacheBtn">Clear data saved on this device</button></div>
     </div>
   </section>
 
-  <!-- COMPANIES (platform owner) -->
+  <!-- COMPANIES (App admin) -->
   <section data-panel="companies" hidden>
     <div class="grid side">
       <div class="card">
         <h2>Companies</h2>
-        <div class="table-wrap"><table><thead><tr><th>Company</th><th>Code</th><th>Status</th><th></th></tr></thead><tbody id="orgBody"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Company</th><th>Code</th><th>Status</th><th>AI assistant (Gemini free)</th><th></th></tr></thead><tbody id="orgBody"></tbody></table></div>
       </div>
       <form class="card" id="newOrgForm">
         <h2>Add a company</h2>
         <div class="field"><label for="nName">Company name</label><input id="nName" required placeholder="e.g. Koveli Resort"></div>
         <div class="field"><label for="nCode">Company code</label><input id="nCode" required pattern="[A-Za-z0-9]{4,16}" title="4–16 letters or numbers" style="text-transform:uppercase"><div class="hint">Staff type this when registering. Letters and numbers only.</div></div>
-        <div class="field"><label for="nDepts">Departments</label><textarea id="nDepts" placeholder="Front Office&#10;Housekeeping&#10;Kitchen">General</textarea><div class="hint">One per line. More can be added later.</div></div>
-        <button class="btn" id="newOrgBtn">Create company</button>
+        <div class="field"><label for="nDepts">Units</label><textarea id="nDepts" placeholder="Front Office&#10;Housekeeping&#10;Kitchen">General</textarea><div class="hint">One per line. More can be added later.</div></div>
+        <label class="check"><input type="checkbox" id="nAi"> Allow the optional AI assistant (Gemini free tier)</label>
+        <button class="btn" id="newOrgBtn" style="margin-top:8px">Create company</button>
         <p class="small muted">Next: give the company code to their HR person. When they register, open the company, approve them in <strong>Staff</strong> and set their role to <strong>Company admin</strong>.</p>
       </form>
     </div>
   </section>
 </main>
 
+<!-- staff editor -->
 <dialog id="staffDlg">
   <form id="staffForm" method="dialog">
     <div class="dlg-body">
       <h2 id="dlgTitle">Edit staff</h2>
       <div class="row"><div class="field"><label for="fName">Full name</label><input id="fName" required></div>
         <div class="field"><label for="fStaffId">Staff ID</label><input id="fStaffId" required></div></div>
-      <div class="row"><div class="field"><label for="fDept">Department</label><select id="fDept" required></select></div>
+      <div class="row"><div class="field"><label for="fDept">Unit</label><select id="fDept" required></select></div>
         <div class="field"><label for="fDesig">Designation</label><input id="fDesig"></div></div>
-      <div class="row"><div class="field"><label for="fLevel">Duty level / grade</label><input id="fLevel" list="levels" placeholder="e.g. Level 2"><datalist id="levels"></datalist><div class="hint">Staff can only swap duties with others in the same department at the same level.</div></div>
+      <div class="row"><div class="field"><label for="fLevel">Duty level / grade</label><input id="fLevel" list="levels" placeholder="e.g. Level 2"><datalist id="levels"></datalist><div class="hint">Staff can only swap duties with others in the same unit at the same level.</div></div>
         <div class="field"><label for="fPhone">Mobile</label><input id="fPhone"></div></div>
       <div class="row r3"><div class="field"><label for="fRole">Role</label><select id="fRole"></select></div>
         <div class="field"><label for="fStatus">Status</label><select id="fStatus"><option value="pending">Pending</option><option value="active">Active</option><option value="disabled">Disabled</option></select></div>
         <div class="field"><label for="fEnt">AL entitlement</label><input id="fEnt" type="number" min="0"></div></div>
       <div class="row r3"><div class="field"><label for="fTaken">AL taken</label><input id="fTaken" type="number" min="0"></div></div>
+      <div class="field" id="fUnitsWrap" hidden><label>Unit admin of</label><div class="actions" id="fUnits"></div><div class="hint">Their own unit is always included. Tick any other units they should manage.</div></div>
       <p class="small muted" id="fRoleHint" style="margin:0 0 6px"></p>
       <p class="small muted" id="fEmail" style="margin:0"></p>
     </div>
     <div class="dlg-foot"><button type="button" class="btn ghost" id="dlgCancel">Cancel</button><button class="btn" id="dlgSave" value="save">Save</button></div>
+  </form>
+</dialog>
+
+<!-- roster: pick a shift for one cell -->
+<div class="cell-pop" id="cellPop" hidden></div>
+
+<!-- roster: pattern fill -->
+<dialog id="patternDlg">
+  <form method="dialog" id="patternForm">
+    <div class="dlg-body">
+      <h2>Pattern fill</h2>
+      <p class="small muted" style="margin-top:0">Build a repeating pattern by tapping shifts. It repeats to the end of the month.</p>
+      <div class="palette small-chips" id="patChips"></div>
+      <div class="field" style="margin-top:10px"><label>Pattern</label><div class="pattern-seq" id="patSeq"><span class="muted small">Tap shifts above…</span></div>
+        <div class="actions" style="margin-top:6px"><button type="button" class="btn ghost sm" id="patBack">⌫ Remove last</button><button type="button" class="btn ghost sm" id="patReset">Clear</button>
+          <span class="small muted">Presets:</span><span id="patPresets" class="actions"></span></div></div>
+      <div class="row">
+        <div class="field"><label for="patStart">Start on day</label><input type="number" id="patStart" min="1" max="31" value="1"></div>
+        <div class="field"><label for="patStagger">Shift each next person by (days)</label><input type="number" id="patStagger" min="0" max="31" value="0"><div class="hint">0 = everyone the same; 1 = rotate so not everyone is off together.</div></div>
+      </div>
+      <label class="check"><input type="checkbox" id="patOnlyEmpty" checked> Only fill empty cells</label>
+      <label class="check"><input type="checkbox" id="patLeave" checked> Put AL on days with approved leave</label>
+      <div class="field" style="margin-top:10px"><label>Staff <a href="#" id="patAll" class="small">all</a> · <a href="#" id="patNone" class="small">none</a></label><div class="staff-checks" id="patStaff"></div></div>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="patCancel">Cancel</button><button class="btn" id="patApply" value="apply">Fill roster</button></div>
+  </form>
+</dialog>
+
+<!-- roster: copy previous month -->
+<dialog id="copyDlg">
+  <form method="dialog" id="copyForm">
+    <div class="dlg-body">
+      <h2>Copy previous month</h2>
+      <label class="check"><input type="radio" name="copyMode" value="weekday" checked> <span><strong>Same weekdays</strong> — repeat the last 4 weeks of the previous month (keeps weekly rotations)</span></label>
+      <label class="check"><input type="radio" name="copyMode" value="date"> <span><strong>Same dates</strong> — day 1 → day 1, day 2 → day 2…</span></label>
+      <label class="check"><input type="checkbox" id="copyOnlyEmpty" checked> Only fill empty cells</label>
+      <p class="small muted" id="copyInfo"></p>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="copyCancel">Cancel</button><button class="btn" id="copyApply" value="apply">Copy</button></div>
+  </form>
+</dialog>
+
+<!-- roster: built-in auto-roster -->
+<dialog id="autoDlg">
+  <form method="dialog" id="autoForm">
+    <div class="dlg-body">
+      <h2>⚡ Auto-roster</h2>
+      <p class="small muted" style="margin-top:0">Builds the month for you from the unit's shifts and roster rules, approved leave and fair shares of hours, nights and weekends. It runs on this device: free, unlimited, and nothing is sent anywhere. You review it before publishing, and you can undo it.</p>
+      <div class="field"><label>Staff needed on each shift per day</label><div id="autoNeed"></div><div class="hint">Filled in from the unit's “minimum staff” rule. Change them here for this run.</div></div>
+      <div class="row">
+        <div class="field"><label for="autoStart">Start on day</label><input type="number" id="autoStart" min="1" max="31" value="1"></div>
+        <div class="field"><label>&nbsp;</label>
+          <label class="check" style="margin:0"><input type="checkbox" id="autoOnlyEmpty" checked> Keep what's already in the grid</label>
+          <label class="check" style="margin:4px 0 0"><input type="checkbox" id="autoOff" checked> Put OFF on the other days</label></div>
+      </div>
+      <div class="field"><label>Staff to roster <a href="#" id="autoAll" class="small">all</a> · <a href="#" id="autoNone" class="small">none</a></label><div class="staff-checks" id="autoStaff"></div></div>
+      <div id="autoResult" class="ai-result" hidden></div>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="autoClose">Close</button><button type="button" class="btn ghost" id="autoUndo" hidden>↶ Undo</button><button class="btn" id="autoGo" value="go">Build roster</button></div>
+  </form>
+</dialog>
+
+<!-- roster: AI assistant (optional, Google Gemini free tier) -->
+<dialog id="aiDlg">
+  <form method="dialog" id="aiForm">
+    <div class="dlg-body">
+      <h2>✨ AI roster assistant</h2>
+      <p class="small muted" style="margin-top:0">Describe what you want in your own words. Uses Google Gemini's free tier. <strong>Staff names are replaced with codes before anything is sent</strong> — Google only sees levels, shifts, rules, leave days and the grid. You review the result before publishing and can undo it.</p>
+      <div class="actions" id="aiChips" style="margin-bottom:8px"></div>
+      <div class="field"><textarea id="aiPrompt" style="min-height:110px" placeholder="e.g. Fill the whole month fairly. 2 people on Morning and Evening, 1 on Night. Keep the rules. Ali prefers mornings."></textarea></div>
+      <label class="check"><input type="checkbox" id="aiOnlyEmpty"> Keep everything already in the grid, only fill empty cells</label>
+      <div id="aiResult" class="ai-result" hidden></div>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="aiClose">Close</button><button type="button" class="btn ghost" id="aiUndo" hidden>↶ Undo AI changes</button><button class="btn" id="aiGo" value="go">Ask AI</button></div>
   </form>
 </dialog>
 
