@@ -36,6 +36,7 @@ export function withAuth(fn, { allowPending = false } = {}) {
       const status = snap.data().status;
       if (status !== 'active' && !(allowPending && status === 'pending')) throw httpError(403, 'Account is not active');
       const me = { uid: decoded.uid, ...snap.data() };
+      if (!me.name) me.name = me.email || decoded.email || 'Admin';
       const base = (process.env.APP_URL || `https://${req.headers['x-forwarded-host'] || req.headers.host}`).replace(/\/$/, '');
       const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
       const out = await fn({ me, body, base });
@@ -50,9 +51,12 @@ export function withAuth(fn, { allowPending = false } = {}) {
 export const isSuper = me => me.role === 'super' && me.status === 'active';
 /** Company admin of orgId, or the platform owner */
 export const isAdminOf = (me, orgId) => isSuper(me) || (me.status === 'active' && me.role === 'admin' && me.orgId === orgId);
-/** Can manage department deptId of orgId */
-export const isMgrOf = (me, orgId, deptId) => isAdminOf(me, orgId) || (me.status === 'active' && me.role === 'deptadmin' && me.orgId === orgId && me.deptId === deptId);
-export function requireMgr(me, orgId, deptId) { if (!isMgrOf(me, orgId, deptId)) throw httpError(403, 'You do not manage this department'); }
+/** Units a unit admin manages: their own unit plus any extra units the company admin gave them */
+export const managedUnits = u => [...new Set([u.deptId, ...(Array.isArray(u.units) ? u.units : [])].filter(Boolean))];
+/** Can manage unit deptId of orgId */
+export const isMgrOf = (me, orgId, deptId) => isAdminOf(me, orgId)
+  || (me.status === 'active' && me.role === 'deptadmin' && me.orgId === orgId && managedUnits(me).includes(deptId));
+export function requireMgr(me, orgId, deptId) { if (!isMgrOf(me, orgId, deptId)) throw httpError(403, 'You do not manage this unit'); }
 export const isManagerRole = r => ['admin', 'deptadmin', 'super'].includes(r);
 
 /* ---------- data helpers ---------- */
@@ -63,7 +67,7 @@ const LIST_KEYS = ['slEmails', 'frlEmails', 'swapEmails', 'leaveEmails'];
  * Everything needed to notify people about something in one department:
  *  - org / dept names (for email branding)
  *  - recipients(key): company list + department list for slEmails / frlEmails / leaveEmails / swapEmails
- *  - managers: active company admins + that department's admins
+ *  - managers: active company admins + the unit admins who manage that unit
  *  - emailAdmins / pushAdmins: company options
  */
 export async function loadScope(orgId, deptId) {
@@ -77,7 +81,7 @@ export async function loadScope(orgId, deptId) {
   const o = { ...DEFAULT_SETTINGS, ...(orgSet.exists ? orgSet.data() : {}) };
   const d = deptSet?.exists ? deptSet.data() : {};
   const managers = usersQ.docs.map(x => ({ uid: x.id, ...x.data() }))
-    .filter(u => u.role === 'admin' || (u.role === 'deptadmin' && deptId && u.deptId === deptId));
+    .filter(u => u.role === 'admin' || (u.role === 'deptadmin' && deptId && managedUnits(u).includes(deptId)));
   return {
     orgId, deptId,
     orgName: org.data().name || 'Company',
