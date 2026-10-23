@@ -212,7 +212,7 @@ function drawReports() {
       ${r.notifiedAt ? '' : `<button class="btn ghost sm" data-resend="${r.id}" title="Sends the report details without attachments (only the staff member has the files)">Send email</button>`}</div></td></tr>`).join('')
     : '<tr><td colspan="9" class="empty">No reports.</td></tr>';
   $$('[data-ack]').forEach(b => b.onclick = async () => {
-    await updateDoc(doc(db, 'reports', b.dataset.ack), { status: 'acknowledged', acknowledgedBy: profile.name, acknowledgedAt: serverTimestamp() });
+    await updateDoc(doc(db, 'reports', b.dataset.ack), { status: 'acknowledged', acknowledgedBy: profile.name || profile.email, acknowledgedAt: serverTimestamp() });
     freshly(loaders.reports);
   });
   $$('[data-resend]').forEach(b => b.onclick = async () => {
@@ -263,7 +263,7 @@ async function decideLeave(id, decision, btn) {
   busy(btn, true, '…');
   try {
     const batch = writeBatch(db);
-    batch.update(doc(db, 'leaveRequests', id), { status: decision, adminComment: comment.trim(), decidedBy: profile.name, decidedAt: serverTimestamp() });
+    batch.update(doc(db, 'leaveRequests', id), { status: decision, adminComment: comment.trim(), decidedBy: profile.name || profile.email, decidedAt: serverTimestamp() });
     const sign = decision === 'approved' ? 1 : decision === 'revoked' ? -1 : 0;
     if (sign) {
       batch.update(doc(db, 'users', l.uid), { alTaken: increment(sign * l.days) });
@@ -347,7 +347,7 @@ function drawSwaps() {
     : '<tr><td colspan="9" class="empty">No requests.</td></tr>';
   $$('[data-swc]').forEach(b => b.onclick = async () => {
     if (!confirm('Cancel this duty change request?')) return;
-    await updateDoc(doc(db, 'swaps', b.dataset.swc), { status: 'cancelled', updatedAt: serverTimestamp(), cancelledBy: profile.name });
+    await updateDoc(doc(db, 'swaps', b.dataset.swc), { status: 'cancelled', updatedAt: serverTimestamp(), cancelledBy: profile.name || profile.email });
     freshly(loaders.swaps);
   });
 }
@@ -461,7 +461,7 @@ function drawRules() {
   setSel('ruMaxConsec', r.maxConsecutive); setSel('ruMinRest', r.minRestHours); setSel('ruMaxWeek', r.maxWeeklyHours); setSel('ruMinOff', r.minDaysOffPerWeek);
   $('#ruNotes').value = r.notes || '';
   const shifts = Object.values(mergeShifts(S.org?.shifts?.length ? S.org.shifts : DEFAULT_SHIFTS, unitSettings.shifts || [])).filter(s => !s.off);
-  $('#ruMinStaff').innerHTML = shifts.map(s => `<label class="min-item"><span class="code sc-${esc(s.color || 'sky')}">${esc(s.code)}</span> ${esc(s.name)}
+  $('#ruMinStaff').innerHTML = shifts.map(s => `<label class="min-item"><span class="code sc-${esc(s.color || 'sky')}">${esc(s.start ? s.start.replace(':', '') : s.code)}</span> ${esc(s.name)}
     <select data-min="${esc(s.code)}">${opt('', '—')}${Array.from({ length: 21 }, (_, i) => `<option value="${i}" ${String(r.minPerShift?.[s.code] ?? '') === String(i) ? 'selected' : ''}>${i}</option>`).join('')}</select></label>`).join('') || '<span class="muted small">No working shifts defined yet — add them above and save.</span>';
 }
 $('#copyLink').onclick = async () => { try { await navigator.clipboard.writeText($('#inviteLink').value); toast('Link copied.', 'ok'); } catch { $('#inviteLink').select(); } };
