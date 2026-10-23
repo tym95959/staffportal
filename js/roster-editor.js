@@ -17,6 +17,10 @@ export const DEFAULT_SHIFTS = [
   { code: 'SL', name: 'Sick leave', off: true, color: 'rose' },
   { code: 'PH', name: 'Public holiday', off: true, color: 'teal' }
 ];
+/** what a shift looks like in the roster: its start time (0830) or, for day off / leave, its code */
+/** shifts in time order (earliest start first), day-off / leave codes last */
+export const byTime = shifts => Object.values(shifts).sort((a, b) => (!!a.off - !!b.off) || String(a.start || '').localeCompare(String(b.start || '')) || a.code.localeCompare(b.code));
+export const lbl = s => (!s.off && s.start ? s.start.replace(':', '') : s.code);
 const hrs = s => { const sp = shiftSpan(s.code || 'X', { [s.code || 'X']: s }); return sp ? Math.round(sp.hours * 100) / 100 : ''; };
 
 /* Times every 15 minutes for the dropdowns: 00:00, 00:15 … 23:45 */
@@ -49,15 +53,20 @@ export function shiftEditor(el, list) {
       const ev = inp.tagName === 'SELECT' || inp.type === 'checkbox' ? 'change' : 'input';
       inp.addEventListener(ev, () => {
         const tr = inp.closest('tr'), i = +tr.dataset.i, k = inp.dataset.k, r = rows[i];
+        const oldAuto = (r.start || '').replace(':', '');
         r[k] = inp.type === 'checkbox' ? inp.checked : k === 'code' ? inp.value.trim().toUpperCase() : inp.value;
         if (k === 'off') { if (r.off) { delete r.start; delete r.end; } else { r.start ||= '09:00'; r.end ||= '17:00'; } draw(); return; }
-        if (k === 'start' || k === 'end') { r.start = $('[data-k="start"]', tr)?.value; r.end = $('[data-k="end"]', tr)?.value; }
+        if (k === 'start' || k === 'end') {
+          r.start = $('[data-k="start"]', tr)?.value; r.end = $('[data-k="end"]', tr)?.value;
+          // a code that was just the start time follows the new start time
+          if (k === 'start' && (!r.code || r.code === oldAuto)) { r.code = r.start.replace(':', ''); $('[data-k="code"]', tr).value = r.code; }
+        }
         const badge = $('.code', tr); badge.textContent = r.code || '?'; badge.className = `code sc-${r.color || 'sky'}`;
         $('.hrs', tr).textContent = r.off ? '—' : hrs(r) || '—';
       });
     });
     $$('[data-del]', el).forEach(b => b.onclick = () => { rows.splice(+b.dataset.del, 1); draw(); });
-    $('[data-add]', el).onclick = () => { rows.push({ code: '', name: '', start: '09:00', end: '17:00', color: SHIFT_PALETTE[rows.length % SHIFT_PALETTE.length] }); draw(); $$('tr[data-i] input[data-k="code"]', el).at(-1)?.focus(); };
+    $('[data-add]', el).onclick = () => { rows.push({ code: '0900', name: '', start: '09:00', end: '17:00', color: SHIFT_PALETTE[rows.length % SHIFT_PALETTE.length] }); draw(); $$('tr[data-i] input[data-k="code"]', el).at(-1)?.focus(); };
     const d = $('[data-defaults]', el); if (d) d.onclick = () => { rows = DEFAULT_SHIFTS.map(s => ({ ...s })); draw(); };
   };
   draw();
@@ -65,14 +74,14 @@ export function shiftEditor(el, list) {
     get() {
       const out = [], seen = new Set();
       for (const s of rows) {
-        const code = String(s.code || '').trim().toUpperCase();
+        const code = String(s.code || (!s.off && s.start ? s.start.replace(':', '') : '')).trim().toUpperCase();
         if (!code) continue;
         if (!/^[A-Z0-9]{1,6}$/.test(code)) throw new Error(`Shift code "${code}" — use 1–6 letters or numbers.`);
-        if (seen.has(code)) throw new Error(`Shift code ${code} is used twice.`);
+        if (seen.has(code)) throw new Error(`Shift code ${code} is used twice. Two shifts starting at the same time need different codes, e.g. ${code} and ${code}L.`);
         if (!s.off && (!s.start || !s.end)) throw new Error(`Shift ${code} needs a start and end time (or tick "Day off").`);
         if (!s.off && s.start === s.end) throw new Error(`Shift ${code} starts and ends at the same time.`);
         seen.add(code);
-        out.push(s.off ? { code, name: s.name || code, off: true, color: s.color || 'grey' } : { code, name: s.name || code, start: s.start, end: s.end, color: s.color || 'sky' });
+        out.push(s.off ? { code, name: s.name || code, off: true, color: s.color || 'grey' } : { code, name: s.name || `${s.start}–${s.end}`, start: s.start, end: s.end, color: s.color || 'sky' });
       }
       return out;
     }
@@ -297,15 +306,15 @@ export function initRosterEditor(ctx) {
 
   /* ---------- palette ---------- */
   function drawPalette() {
-    const sh = Object.values(E.shifts);
+    const sh = byTime(E.shifts);
     const t = s => s.off ? s.name : `${s.start}–${s.end}`;
     $('#palette').innerHTML = `<button type="button" class="chip-btn ${brush === null ? 'on' : ''}" data-brush="__pick">☝ Pick</button>`
-      + sh.map(s => `<button type="button" class="chip-btn sc-${esc(s.color || 'sky')} ${brush === s.code ? 'on' : ''}" data-brush="${esc(s.code)}" title="${esc(s.name)}"><strong>${esc(s.code)}</strong><small>${esc(t(s))}</small></button>`).join('')
+      + sh.map(s => `<button type="button" class="chip-btn sc-${esc(s.color || 'sky')} ${brush === s.code ? 'on' : ''}" data-brush="${esc(s.code)}" title="${esc(s.name)} ${esc(t(s))}"><strong>${esc(lbl(s))}</strong><small>${esc(s.off ? s.name : `to ${s.end}`)}</small></button>`).join('')
       + `<button type="button" class="chip-btn sc-sky ${brush === 'CUSTOM' ? 'on' : ''}" data-brush="CUSTOM"><strong>⏱</strong><small>Custom time</small></button>`
       + `<button type="button" class="chip-btn ${brush === '' ? 'on' : ''}" data-brush=""><strong>⌫</strong><small>Eraser</small></button>`;
     $$('#palette [data-brush]').forEach(b => b.onclick = () => { const v = b.dataset.brush; brush = v === '__pick' ? null : v; drawPalette(); $('#rGrid').classList.toggle('painting', brush !== null); });
     $('#customTime').hidden = brush !== 'CUSTOM';
-    $('#rLegend').innerHTML = sh.map(s => `<span><span class="code sc-${esc(s.color || 'sky')}">${esc(s.code)}</span> ${esc(s.name)}${s.off ? '' : ` ${esc(s.start)}–${esc(s.end)}`}</span>`).join('');
+    $('#rLegend').innerHTML = sh.map(s => `<span><span class="code sc-${esc(s.color || 'sky')}">${esc(lbl(s))}</span> ${esc(s.name)}${s.off ? '' : ` ${esc(s.start)}–${esc(s.end)}`}</span>`).join('');
   }
   $('#ctStart').innerHTML = timeOptions('09:00'); $('#ctEnd').innerHTML = timeOptions('17:00');
   const brushValue = () => brush === 'CUSTOM' ? `${$('#ctStart').value}-${$('#ctEnd').value}` : brush;
@@ -330,7 +339,7 @@ export function initRosterEditor(ctx) {
     const minPer = E.rules.minPerShift || {};
     for (const [code, counts] of Object.entries(V.coverage)) {
       const need = Number(minPer[code]) || 0;
-      h += `<tr class="cov"><td class="name"><span class="code ${shiftClass(code, shifts)}">${esc(code)}</span> on duty${need ? ` <span class="muted">(min ${need})</span>` : ''}</td>`
+      h += `<tr class="cov"><td class="name"><span class="code ${shiftClass(code, shifts)}">${esc(cellText(code, shifts))}</span> on duty${need ? ` <span class="muted">(min ${need})</span>` : ''}</td>`
         + counts.map(c => `<td class="${need ? (c < need ? 'low' : 'okc') : ''}">${c || ''}</td>`).join('') + '<td class="tot"></td><td class="tot"></td></tr>';
     }
     $('#rGrid').innerHTML = h + '</tfoot>';
@@ -343,7 +352,7 @@ export function initRosterEditor(ctx) {
     const f = V?.flags.get(`${uid}|${i}`);
     const cls = [shiftClass(v, E.shifts), isWeekend(d) ? 'we' : '', lv ? 'lv' : lp ? 'lvp' : '', v !== pubVal(uid, i) ? 'chg' : '', f ? 'bad' : ''].join(' ');
     const tip = [v ? (E.shifts[v] ? `${E.shifts[v].name}${E.shifts[v].off ? '' : ` ${E.shifts[v].start}–${E.shifts[v].end}`}` : isCustomTime(v) ? `Custom ${v}` : v) : '', lv ? 'Approved leave' : lp ? 'Leave requested (pending)' : '', f || ''].filter(Boolean).join('\n');
-    return `<td class="cell ${cls}" data-u="${uid}" data-i="${i}" title="${esc(tip)}">${esc(cellText(v))}</td>`;
+    return `<td class="cell ${cls}" data-u="${uid}" data-i="${i}" title="${esc(tip)}">${esc(cellText(v, E.shifts))}</td>`;
   }
   function setCell(uid, i, v, td) {
     if ((E.rows[uid][i] || '') === v) return false;
@@ -390,7 +399,7 @@ export function initRosterEditor(ctx) {
     const uid = td.dataset.u, i = +td.dataset.i, cur = E.rows[uid][i] || '';
     const n = E.names[uid]?.name || '';
     pop.innerHTML = `<div class="pop-head"><strong>${esc(n)}</strong> · ${fmtShort(dateOf(i))}${E.leave[uid]?.has(i) ? ' · <span style="color:var(--ok)">approved leave</span>' : ''}</div>
-      <div class="pop-list">${Object.values(E.shifts).map(s => `<button type="button" class="chip-btn sc-${esc(s.color || 'sky')} ${cur === s.code ? 'on' : ''}" data-v="${esc(s.code)}"><strong>${esc(s.code)}</strong><small>${esc(s.off ? s.name : `${s.start}–${s.end}`)}</small></button>`).join('')}</div>
+      <div class="pop-list">${byTime(E.shifts).map(s => `<button type="button" class="chip-btn sc-${esc(s.color || 'sky')} ${cur === s.code ? 'on' : ''}" data-v="${esc(s.code)}"><strong>${esc(lbl(s))}</strong><small>${esc(s.off ? s.name : `to ${s.end}`)}</small></button>`).join('')}</div>
       <div class="pop-custom"><span class="small muted">Custom</span> <select id="popS" class="time-sel">${timeOptions(isCustomTime(cur) ? cur.slice(0, 5) : '09:00')}</select> – <select id="popE" class="time-sel">${timeOptions(isCustomTime(cur) ? cur.slice(6) : '17:00')}</select> <button type="button" class="btn ghost sm" id="popSet">Set</button></div>
       <div class="actions" style="justify-content:space-between"><button type="button" class="btn ghost sm" data-v="">Clear</button><button type="button" class="btn ghost sm" id="popClose">Close</button></div>`;
     const r = td.getBoundingClientRect();
@@ -438,7 +447,7 @@ export function initRosterEditor(ctx) {
       const shifts = Object.fromEntries(Object.values(E.shifts).filter(s => used.has(s.code) || !s.off).map(s => [s.code, s]));
       await setDoc(doc(db, 'rosters', id), {
         orgId: S.orgId, deptId: S.deptId, month, days, order: cleanOrder, names: Object.fromEntries(cleanOrder.map(u => [u, names[u] || {}])),
-        rows: Object.fromEntries(cleanOrder.map(u => [u, rows[u]])), shifts, legend: shiftLegend(shifts), updatedAt: serverTimestamp(), updatedBy: profile.name
+        rows: Object.fromEntries(cleanOrder.map(u => [u, rows[u]])), shifts, legend: shiftLegend(shifts), updatedAt: serverTimestamp(), updatedBy: profile.name || profile.email || 'Admin'
       });
       await idb.del('drafts', draftKey()); await invalidate('rosters/');
       const notifyUids = Object.keys(changes).filter(u => cleanOrder.includes(u));
@@ -504,18 +513,19 @@ export function initRosterEditor(ctx) {
 
   /* ---------- pattern fill ---------- */
   let seq = [];
-  const chipFor = c => { const s = E.shifts[c]; return `<span class="code ${shiftClass(c, E.shifts)}">${esc(c)}</span>`; };
+  const chipFor = c => `<span class="code ${shiftClass(c, E.shifts)}">${esc(cellText(c, E.shifts))}</span>`;
   function drawSeq() { $('#patSeq').innerHTML = seq.length ? seq.map(chipFor).join(' ') + ` <span class="small muted">(${seq.length}-day cycle)</span>` : '<span class="muted small">Tap shifts above…</span>'; }
   $('#rPattern').onclick = () => {
     if (!E) return;
-    const sh = Object.values(E.shifts);
-    $('#patChips').innerHTML = sh.map(s => `<button type="button" class="chip-btn sc-${esc(s.color || 'sky')}" data-c="${esc(s.code)}"><strong>${esc(s.code)}</strong><small>${esc(s.off ? s.name : `${s.start}–${s.end}`)}</small></button>`).join('');
+    const sh = byTime(E.shifts);
+    $('#patChips').innerHTML = sh.map(s => `<button type="button" class="chip-btn sc-${esc(s.color || 'sky')}" data-c="${esc(s.code)}"><strong>${esc(lbl(s))}</strong><small>${esc(s.off ? s.name : `to ${s.end}`)}</small></button>`).join('');
     $$('#patChips [data-c]').forEach(b => b.onclick = () => { seq.push(b.dataset.c); drawSeq(); });
     const work = sh.filter(s => !s.off).map(s => s.code), off = sh.find(s => s.off && /^OFF$/i.test(s.code))?.code || sh.find(s => s.off)?.code || '';
     const presets = [];
-    if (work[0] && off) presets.push([`5 ${work[0]} + 2 ${off}`, [...Array(5).fill(work[0]), off, off]]);
+    const L = c => cellText(c, E.shifts);
+    if (work[0] && off) presets.push([`5× ${L(work[0])} + 2 ${off}`, [...Array(5).fill(work[0]), off, off]]);
     if (work.length >= 3 && off) presets.push([`2-2-2 rotation`, [work[0], work[0], work[1], work[1], work[2], work[2], off, off]]);
-    if (work.length >= 2 && off) presets.push([`${work[0]}/${work[1]} weeks`, [...Array(5).fill(work[0]), off, off, ...Array(5).fill(work[1]), off, off]]);
+    if (work.length >= 2 && off) presets.push([`${L(work[0])} / ${L(work[1])} weeks`, [...Array(5).fill(work[0]), off, off, ...Array(5).fill(work[1]), off, off]]);
     $('#patPresets').innerHTML = presets.map((p, i) => `<button type="button" class="btn ghost sm" data-p="${i}">${esc(p[0])}</button>`).join('');
     $$('#patPresets [data-p]').forEach(b => b.onclick = () => { seq = [...presets[+b.dataset.p][1]]; drawSeq(); });
     $('#patStaff').innerHTML = E.order.map(uid => `<label class="check"><input type="checkbox" value="${uid}" checked> ${esc(E.names[uid]?.name || uid)} <span class="muted small">${esc(E.names[uid]?.level || '')}</span></label>`).join('');
@@ -582,10 +592,10 @@ export function initRosterEditor(ctx) {
   $('#rAuto').onclick = () => {
     if (!E) return;
     const minPer = E.rules.minPerShift || {};
-    const work = Object.values(E.shifts).filter(s => !s.off);
+    const work = byTime(E.shifts).filter(s => !s.off);
     if (!work.length) return toast('Add working shifts with times first (Settings → Shifts & timings).', 'bad', 7000);
     $('#autoNeed').innerHTML = `<table class="need-table"><thead><tr><th>Shift</th><th>Weekdays</th><th>Weekend</th></tr></thead><tbody>${work.map(s => `<tr>
-      <td><span class="code sc-${esc(s.color || 'sky')}">${esc(s.code)}</span> ${esc(s.name)} <span class="muted small">${esc(s.start)}–${esc(s.end)}</span></td>
+      <td><span class="code sc-${esc(s.color || 'sky')}">${esc(lbl(s))}</span> ${esc(s.name)} <span class="muted small">${esc(s.start)}–${esc(s.end)}</span></td>
       <td><input type="number" min="0" max="99" data-need="${esc(s.code)}" data-k="wd" value="${esc(minPer[s.code] ?? '')}" placeholder="0"></td>
       <td><input type="number" min="0" max="99" data-need="${esc(s.code)}" data-k="we" value="${esc(minPer[s.code] ?? '')}" placeholder="0"></td></tr>`).join('')}</tbody></table>`;
     $('#autoStaff').innerHTML = E.order.filter(u => E.activeIds.has(u)).map(uid => `<label class="check"><input type="checkbox" value="${uid}" checked> ${esc(E.names[uid]?.name || uid)} <span class="muted small">${esc(E.names[uid]?.level || '')}</span></label>`).join('');
