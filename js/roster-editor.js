@@ -17,32 +17,44 @@ export const DEFAULT_SHIFTS = [
   { code: 'SL', name: 'Sick leave', off: true, color: 'rose' },
   { code: 'PH', name: 'Public holiday', off: true, color: 'teal' }
 ];
-const hrs = s => { const sp = shiftSpan(s.code, { [s.code]: s }); return sp ? Math.round(sp.hours * 100) / 100 : ''; };
+const hrs = s => { const sp = shiftSpan(s.code || 'X', { [s.code || 'X']: s }); return sp ? Math.round(sp.hours * 100) / 100 : ''; };
+
+/* Times every 15 minutes for the dropdowns: 00:00, 00:15 … 23:45 */
+export const TIMES = Array.from({ length: 96 }, (_, i) => `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`);
+export const timeOptions = sel => (sel && !TIMES.includes(sel) ? `<option value="${esc(sel)}" selected>${esc(sel)}</option>` : '')
+  + TIMES.map(t => `<option value="${t}" ${t === sel ? 'selected' : ''}>${t}</option>`).join('');
 
 /** Editable table of shifts (code, name, start, end, colour, day-off). Returns { get() } */
 export function shiftEditor(el, list) {
   let rows = (list || []).map(s => ({ ...s }));
+  const rowHtml = (s, i) => `<tr data-i="${i}">
+      <td data-l="Code"><input data-k="code" value="${esc(s.code || '')}" maxlength="6" style="width:76px;text-transform:uppercase" placeholder="M"></td>
+      <td data-l="Name"><input data-k="name" value="${esc(s.name || '')}" placeholder="Morning" style="min-width:120px"></td>
+      <td data-l="Start">${s.off ? '<span class="muted small">—</span>' : `<select data-k="start" class="time-sel">${timeOptions(s.start || '09:00')}</select>`}</td>
+      <td data-l="End">${s.off ? '<span class="muted small">—</span>' : `<select data-k="end" class="time-sel">${timeOptions(s.end || '17:00')}</select>`}</td>
+      <td class="small hrs" data-l="Hours">${s.off ? '—' : hrs(s) || '—'}</td>
+      <td data-l="Colour"><div class="actions" style="flex-wrap:nowrap"><select data-k="color" style="width:auto">${SHIFT_PALETTE.map(c => `<option value="${c}" ${s.color === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
+        <span class="code sc-${esc(s.color || 'sky')}">${esc(s.code || '?')}</span></div></td>
+      <td data-l="Day off / leave" style="text-align:center"><input type="checkbox" data-k="off" ${s.off ? 'checked' : ''} aria-label="Day off / leave"></td>
+      <td class="del"><button type="button" class="btn ghost sm" data-del="${i}" aria-label="Remove">×</button></td></tr>`;
   const draw = () => {
     el.innerHTML = `<div class="table-wrap"><table class="shift-table"><thead><tr><th>Code</th><th>Name</th><th>Start</th><th>End</th><th>Hours</th><th>Colour</th><th>Day off / leave</th><th></th></tr></thead><tbody>
-      ${rows.map((s, i) => `<tr data-i="${i}">
-        <td><input data-k="code" value="${esc(s.code || '')}" maxlength="6" style="width:76px;text-transform:uppercase" placeholder="M"></td>
-        <td><input data-k="name" value="${esc(s.name || '')}" placeholder="Morning" style="min-width:120px"></td>
-        <td><input type="time" data-k="start" value="${esc(s.start || '')}" ${s.off ? 'disabled' : ''}></td>
-        <td><input type="time" data-k="end" value="${esc(s.end || '')}" ${s.off ? 'disabled' : ''}></td>
-        <td class="small">${s.off ? '—' : hrs({ ...s, code: s.code || 'X' }) || '—'}</td>
-        <td><div class="actions" style="flex-wrap:nowrap"><select data-k="color" style="width:auto">${SHIFT_PALETTE.map(c => `<option value="${c}" ${s.color === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
-          <span class="code sc-${esc(s.color || 'sky')}">${esc(s.code || '?')}</span></div></td>
-        <td style="text-align:center"><input type="checkbox" data-k="off" ${s.off ? 'checked' : ''}></td>
-        <td><button type="button" class="btn ghost sm" data-del="${i}" aria-label="Remove">×</button></td></tr>`).join('')}
+      ${rows.map(rowHtml).join('')}
       ${rows.length ? '' : '<tr><td colspan="8" class="empty">No shifts yet.</td></tr>'}
       </tbody></table></div>
       <div class="actions" style="margin-top:8px"><button type="button" class="btn ghost sm" data-add>+ Add shift</button>
       ${rows.length ? '' : '<button type="button" class="btn ghost sm" data-defaults>Use standard shifts (M, E, N, OFF, AL, SL, PH)</button>'}</div>`;
-    $$('input,select', el).forEach(inp => inp.onchange = () => {
-      const i = +inp.closest('tr').dataset.i, k = inp.dataset.k;
-      rows[i][k] = inp.type === 'checkbox' ? inp.checked : k === 'code' ? inp.value.trim().toUpperCase() : inp.value;
-      if (k === 'off' && inp.checked) { delete rows[i].start; delete rows[i].end; }
-      draw();
+    // typing or choosing updates the row in place, so the next tap is never lost
+    $$('[data-k]', el).forEach(inp => {
+      const ev = inp.tagName === 'SELECT' || inp.type === 'checkbox' ? 'change' : 'input';
+      inp.addEventListener(ev, () => {
+        const tr = inp.closest('tr'), i = +tr.dataset.i, k = inp.dataset.k, r = rows[i];
+        r[k] = inp.type === 'checkbox' ? inp.checked : k === 'code' ? inp.value.trim().toUpperCase() : inp.value;
+        if (k === 'off') { if (r.off) { delete r.start; delete r.end; } else { r.start ||= '09:00'; r.end ||= '17:00'; } draw(); return; }
+        if (k === 'start' || k === 'end') { r.start = $('[data-k="start"]', tr)?.value; r.end = $('[data-k="end"]', tr)?.value; }
+        const badge = $('.code', tr); badge.textContent = r.code || '?'; badge.className = `code sc-${r.color || 'sky'}`;
+        $('.hrs', tr).textContent = r.off ? '—' : hrs(r) || '—';
+      });
     });
     $$('[data-del]', el).forEach(b => b.onclick = () => { rows.splice(+b.dataset.del, 1); draw(); });
     $('[data-add]', el).onclick = () => { rows.push({ code: '', name: '', start: '09:00', end: '17:00', color: SHIFT_PALETTE[rows.length % SHIFT_PALETTE.length] }); draw(); $$('tr[data-i] input[data-k="code"]', el).at(-1)?.focus(); };
@@ -58,6 +70,7 @@ export function shiftEditor(el, list) {
         if (!/^[A-Z0-9]{1,6}$/.test(code)) throw new Error(`Shift code "${code}" — use 1–6 letters or numbers.`);
         if (seen.has(code)) throw new Error(`Shift code ${code} is used twice.`);
         if (!s.off && (!s.start || !s.end)) throw new Error(`Shift ${code} needs a start and end time (or tick "Day off").`);
+        if (!s.off && s.start === s.end) throw new Error(`Shift ${code} starts and ends at the same time.`);
         seen.add(code);
         out.push(s.off ? { code, name: s.name || code, off: true, color: s.color || 'grey' } : { code, name: s.name || code, start: s.start, end: s.end, color: s.color || 'sky' });
       }
@@ -294,6 +307,7 @@ export function initRosterEditor(ctx) {
     $('#customTime').hidden = brush !== 'CUSTOM';
     $('#rLegend').innerHTML = sh.map(s => `<span><span class="code sc-${esc(s.color || 'sky')}">${esc(s.code)}</span> ${esc(s.name)}${s.off ? '' : ` ${esc(s.start)}–${esc(s.end)}`}</span>`).join('');
   }
+  $('#ctStart').innerHTML = timeOptions('09:00'); $('#ctEnd').innerHTML = timeOptions('17:00');
   const brushValue = () => brush === 'CUSTOM' ? `${$('#ctStart').value}-${$('#ctEnd').value}` : brush;
 
   /* ---------- grid ---------- */
@@ -377,7 +391,7 @@ export function initRosterEditor(ctx) {
     const n = E.names[uid]?.name || '';
     pop.innerHTML = `<div class="pop-head"><strong>${esc(n)}</strong> · ${fmtShort(dateOf(i))}${E.leave[uid]?.has(i) ? ' · <span style="color:var(--ok)">approved leave</span>' : ''}</div>
       <div class="pop-list">${Object.values(E.shifts).map(s => `<button type="button" class="chip-btn sc-${esc(s.color || 'sky')} ${cur === s.code ? 'on' : ''}" data-v="${esc(s.code)}"><strong>${esc(s.code)}</strong><small>${esc(s.off ? s.name : `${s.start}–${s.end}`)}</small></button>`).join('')}</div>
-      <div class="pop-custom"><input type="time" id="popS" value="${isCustomTime(cur) ? cur.slice(0, 5) : '09:00'}"> – <input type="time" id="popE" value="${isCustomTime(cur) ? cur.slice(6) : '17:00'}"> <button type="button" class="btn ghost sm" id="popSet">Set time</button></div>
+      <div class="pop-custom"><span class="small muted">Custom</span> <select id="popS" class="time-sel">${timeOptions(isCustomTime(cur) ? cur.slice(0, 5) : '09:00')}</select> – <select id="popE" class="time-sel">${timeOptions(isCustomTime(cur) ? cur.slice(6) : '17:00')}</select> <button type="button" class="btn ghost sm" id="popSet">Set</button></div>
       <div class="actions" style="justify-content:space-between"><button type="button" class="btn ghost sm" data-v="">Clear</button><button type="button" class="btn ghost sm" id="popClose">Close</button></div>`;
     const r = td.getBoundingClientRect();
     pop.hidden = false;
@@ -386,7 +400,7 @@ export function initRosterEditor(ctx) {
     pop.style.top = (r.bottom + window.scrollY + ph + 8 > window.scrollY + window.innerHeight ? r.top + window.scrollY - ph - 6 : r.bottom + window.scrollY + 6) + 'px';
     const apply = v => { pushUndo(); if (!setCell(uid, i, v)) undoStack.pop(); pop.hidden = true; changed(); };
     $$('[data-v]', pop).forEach(b => b.onclick = () => apply(b.dataset.v));
-    $('#popSet').onclick = () => { const s = $('#popS').value, e2 = $('#popE').value; if (s && e2) apply(`${s}-${e2}`); };
+    $('#popSet').onclick = () => { const s = $('#popS').value, e2 = $('#popE').value; if (s === e2) return toast('Start and end are the same.', 'bad'); apply(`${s}-${e2}`); };
     $('#popClose').onclick = () => pop.hidden = true;
   }
   document.addEventListener('pointerdown', e => { if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('#rGrid td.cell')) pop.hidden = true; });
@@ -641,6 +655,7 @@ export function initRosterEditor(ctx) {
     busy(b, false);
   };
 
+  $('#rShiftRules').onclick = () => ctx.openShiftRules?.();
   return {
     load, isDirty,
     setAiVisible(on) { $('#rAi').hidden = !on; },
