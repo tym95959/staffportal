@@ -12,7 +12,7 @@
 <header id="topbar"></header>
 <div id="loading" class="spinner-page">Loading…</div>
 <main class="wrap" id="main" hidden>
-  <div class="page-head"><div><h1>Duty change</h1><p class="sub">Swap a duty with a colleague in your department at the same level. When they accept, the roster updates and the office is notified.</p></div></div>
+  <div class="page-head"><div><h1>Duty change</h1><p class="sub">Swap a duty with a colleague in your unit at the same level. When they accept, the roster updates and the office is notified.</p></div></div>
 
   <div class="card" id="incomingCard" style="margin-bottom:16px">
     <h2>Requests waiting for you</h2>
@@ -45,7 +45,7 @@
 </main>
 <script type="module">
   import { requireUser, db, $, $$, esc, fmtDate, fmtShort, fmtTs, pill, today, toast, busy, api, byNewest, shiftOn, loadRoster,
-    collection, doc, addDoc, getDocs, updateDoc, query, where, serverTimestamp, APP_NAME } from '/js/app.js';
+    collection, doc, addDoc, updateDoc, query, where, serverTimestamp, cachedDocs, freshly, invalidate, cellText, APP_NAME } from '/js/app.js';
   document.title = `Duty Change · ${APP_NAME}`;
   const { user, profile, dept } = await requireUser();
 
@@ -53,10 +53,10 @@
   let colleagues = [];
   if (!profile.level) { $('#noLevel').hidden = false; $('#swForm').querySelectorAll('input,select,textarea,button').forEach(x => x.disabled = true); }
   else {
-    const s = await getDocs(query(collection(db, 'directory'), where('orgId', '==', profile.orgId), where('deptId', '==', profile.deptId), where('level', '==', profile.level), where('active', '==', true)));
-    colleagues = s.docs.map(d => ({ uid: d.id, ...d.data() })).filter(c => c.uid !== user.uid).sort((a, b) => a.name.localeCompare(b.name));
+    const list = await cachedDocs('colleagues', query(collection(db, 'directory'), where('orgId', '==', profile.orgId), where('deptId', '==', profile.deptId), where('level', '==', profile.level), where('active', '==', true)));
+    colleagues = list.map(d => ({ uid: d.id, ...d })).filter(c => c.uid !== user.uid).sort((a, b) => a.name.localeCompare(b.name));
     $('#target').innerHTML += colleagues.map(c => `<option value="${c.uid}">${esc(c.name)} (${esc(c.staffId || '')})</option>`).join('');
-    $('#levelHint').textContent = colleagues.length ? `Colleagues in ${dept?.name || 'your department'} at level "${profile.level}"` : `No other active staff in ${dept?.name || 'your department'} at level "${profile.level}"`;
+    $('#levelHint').textContent = colleagues.length ? `Colleagues in ${dept?.name || 'your unit'} at level "${profile.level}"` : `No other active staff in ${dept?.name || 'your unit'} at level "${profile.level}"`;
   }
 
   $('#myDate').value = $('#theirDate').value = today();
@@ -67,9 +67,9 @@
     $('#theirDate').disabled = sameDay();
     const md = $('#myDate').value, td = $('#theirDate').value, t = $('#target').value;
     const mine = md ? await shiftOn(user.uid, md) : '';
-    $('#myShift').textContent = md ? (mine ? `You are on: ${mine}` : (await loadRoster(md.slice(0, 7)) ? 'You are not rostered that day' : 'Roster not published for that month')) : '';
+    $('#myShift').textContent = md ? (mine ? `You are on: ${cellText(mine, (await loadRoster(md.slice(0, 7)))?.shifts)} (${mine})` : (await loadRoster(md.slice(0, 7)) ? 'You are not rostered that day' : 'Roster not published for that month')) : '';
     const theirs = t && td ? await shiftOn(t, td) : '';
-    $('#theirShift').textContent = t && td ? (theirs ? `They are on: ${theirs}` : 'They are not rostered that day') : '';
+    $('#theirShift').textContent = t && td ? (theirs ? `They are on: ${cellText(theirs, (await loadRoster(td.slice(0, 7)))?.shifts)} (${theirs})` : 'They are not rostered that day') : '';
     const c = colleagues.find(x => x.uid === t);
     $('#summary').hidden = !c;
     if (c) $('#summary').innerHTML = md === td
@@ -93,7 +93,7 @@
         reason: $('#reason').value.trim(), status: 'pending', createdAt: serverTimestamp()
       });
       try { await api('/api/notify', { event: 'swap_request', id: ref.id }); } catch (err) { toast('Saved, but notification failed: ' + err.message, 'bad'); }
-      toast(`Request sent to ${c.name}.`, 'ok'); $('#reason').value = ''; loadLists();
+      toast(`Request sent to ${c.name}.`, 'ok'); $('#reason').value = ''; freshly(loadLists);
     } catch (err) { toast(err.message, 'bad'); }
     busy(b, false);
   };
@@ -104,11 +104,11 @@
 
   async function loadLists() {
     const [inc, out] = await Promise.all([
-      getDocs(query(collection(db, 'swaps'), where('targetUid', '==', user.uid))),
-      getDocs(query(collection(db, 'swaps'), where('requesterUid', '==', user.uid)))
+      cachedDocs('swapsForMe', query(collection(db, 'swaps'), where('targetUid', '==', user.uid))),
+      cachedDocs('mySwaps', query(collection(db, 'swaps'), where('requesterUid', '==', user.uid)))
     ]);
-    const incoming = inc.docs.map(d => ({ id: d.id, ...d.data() })).sort(byNewest);
-    const mine = out.docs.map(d => ({ id: d.id, ...d.data() })).sort(byNewest);
+    const incoming = inc.sort(byNewest);
+    const mine = out.sort(byNewest);
     $('#incoming').innerHTML = incoming.length ? incoming.slice(0, 20).map(s => `<div class="list-item"><div>
         <strong>${esc(s.requesterName)}</strong> wants to change duty with you<div class="small">${describe(s)}</div>
         <div class="small muted">${esc(s.reason)} · ${fmtTs(s.createdAt)}</div></div>
@@ -122,14 +122,14 @@
     const respond = async (id, decision, btn) => {
       if (decision === 'reject' && !confirm('Decline this duty change?')) return;
       busy(btn, true, '…');
-      try { await api('/api/swap-respond', { id, decision }); toast(decision === 'accept' ? 'Accepted — roster updated and everyone notified.' : 'Declined.', 'ok'); loadLists(); }
+      try { await api('/api/swap-respond', { id, decision }); toast(decision === 'accept' ? 'Accepted — roster updated and everyone notified.' : 'Declined.', 'ok'); await invalidate('rosters/'); freshly(loadLists); }
       catch (err) { toast(err.message, 'bad'); busy(btn, false); }
     };
     $$('[data-acc]').forEach(b => b.onclick = () => respond(b.dataset.acc, 'accept', b));
     $$('[data-rej]').forEach(b => b.onclick = () => respond(b.dataset.rej, 'reject', b));
     $$('[data-cancel]').forEach(b => b.onclick = async () => {
       if (!confirm('Cancel this request?')) return;
-      await updateDoc(doc(db, 'swaps', b.dataset.cancel), { status: 'cancelled', updatedAt: serverTimestamp() }); loadLists();
+      await updateDoc(doc(db, 'swaps', b.dataset.cancel), { status: 'cancelled', updatedAt: serverTimestamp() }); freshly(loadLists);
     });
   }
   loadLists();
