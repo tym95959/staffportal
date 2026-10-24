@@ -1,153 +1,191 @@
-// Vercel serverless function: sends THAAS push notifications to the Android app.
-// POST /api/notify   body: { roomId, kind }   header: Authorization: Bearer <Firebase ID token>
-//
-// kinds: "turn"  -> the player whose turn it is now
-//        "start" / "round" -> everyone at the table (game / next round started)
-//        "ended" -> everyone at the table (someone called DIGU or CALL)
-//        "join"  -> the lounge owner (someone joined their lounge)
-//        "sit"   -> everyone already at that lobby table (someone sat down)
-//
-// Needs the Vercel environment variable FIREBASE_SERVICE_ACCOUNT (the whole service-account JSON).
-const admin = require("firebase-admin");
+// POST /api/notify  { event, id | rosterId/changes, files }
+// Sends emails + push for things staff/admins just saved. The server re-reads every record itself
+// and works out recipients from that record's company + department, so a caller can't redirect mail.
+import {
+  withAuth, httpError, db, FieldValue, getUsers, sendEmail, emailHtml, parseUploads, pushAndInbox,
+  loadScope, requireMgr, isMgrOf, uniqEmails
+} from './_lib.js';
 
-function init() {
-  if (admin.apps.length) return admin.app();
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT is not set");
-  const databaseURL = process.env.FIREBASE_DATABASE_URL; // set this when the card tables are in Realtime Database
-  return admin.initializeApp({ credential: admin.credential.cert(JSON.parse(raw)), ...(databaseURL ? { databaseURL } : {}) });
+const fmt = d => d ? new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '';
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+function merge(...results) {
+  const out = { emailed: 0, pushed: 0, errors: [] };
+  results.flat().forEach(r => { if (!r) return; out.emailed += r.sent || 0; out.pushed += r.pushed || 0; if (r.error) out.errors.push(r.error); });
+  out.errors = [...new Set(out.errors)];
+  return out;
 }
-
-const GAME = { digu: "DIGU", call: "CALL" };
-const tableLabel = (id, r) => {
-  const g = GAME[r.game === "call" ? "call" : "digu"];
-  if (r.public === false) {
-    const owner = (r.players || []).find((p) => p.uid === r.host);
-    return `${owner?.name || "A"}'s lounge (${g})`;
-  }
-  return `${g} table ${r.tableNo || String(id).slice(-1)}`;
-};
-
-// Who gets told what. Only players at this table can ever be targets.
-function plan(kind, roomId, r, caller) {
-  const name = (r.players || []).find((p) => p.uid === caller)?.name || "Someone";
-  const others = (r.playerIds || []).filter((u) => u !== caller);
-  const where = tableLabel(roomId, r);
-  switch (kind) {
-    case "turn": {
-      if (r.status !== "playing") return null;
-      const next = r.playerIds?.[r.turn];
-      if (!next || next === caller) return null;
-      return { to: [next], title: "Your turn 🃏", body: `${where} · ${name} just played` };
-    }
-    case "start":
-      if (r.status !== "playing") return null;
-      return { to: others, title: "Game started!", body: `${where} · tap to play` };
-    case "round":
-      if (r.status !== "playing") return null;
-      return { to: others, title: "Next round dealt", body: `${where} · round ${r.gameRound || ""}`.trim() };
-    case "ended":
-      if (r.status !== "ended" || r.winner !== caller) return null;
-      return { to: others, title: `${name} called ${GAME[r.game === "call" ? "call" : "digu"]}!`, body: `${where} · see the scores` };
-    case "join":
-      if (r.public !== false || r.host === caller) return null;
-      return { to: [r.host], title: "New player in your lounge", body: `${name} joined · ${r.playerIds.length} seated` };
-    case "sit":
-      if (r.public === false || r.status !== "lobby" || others.length === 0) return null;
-      return { to: others, title: "Someone sat at your table", body: `${name} sat at ${where} · tap Start to play` };
-    default:
-      return null;
-  }
+async function load(col, id) {
+  if (!id || typeof id !== 'string') throw httpError(400, 'Missing id');
+  const ref = db().doc(`${col}/${id}`); const snap = await ref.get();
+  if (!snap.exists) throw httpError(404, 'Record not found');
+  return { ref, data: snap.data() };
 }
+const brandOf = sc => sc.deptName ? `${sc.orgName} · ${sc.deptName}` : sc.orgName;
 
-module.exports = async function handler(req, res) {
-  // the app runs on its own origin (https://localhost), so allow cross-origin calls
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "authorization, content-type");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+/* ---------- SL / FRL report (confidential) ----------
+   Full report + attachments  → only the designated SL or FRL recipients (company list + department list).
+   Admins                     → a short notice without reason or attachments (if "email admins" is on).
+   If no designated recipients are set yet, the full report goes to the company/department admins instead,
+   so the certificate is never lost. */
+async function report(me, id, base, uploads) {
+  const { ref, data: r } = await load('reports', id);
+  if (r.uid !== me.uid && !isMgrOf(me, r.orgId, r.deptId)) throw httpError(403, 'Not your report');
+  if (r.notifiedAt) return { emailed: 0, pushed: 0, skipped: 'already sent' };
+  const sc = await loadScope(r.orgId, r.deptId);
+  const label = r.type === 'SL' ? 'Sick Leave' : 'Family Responsibility Leave';
+  const key = r.type === 'SL' ? 'slEmails' : 'frlEmails';
+  const { files, rejected } = parseUploads(r.uid === me.uid ? uploads : []);
+  const expected = (r.attachments || []).length;
+  let designated = sc.recipients(key), fallback = false;
+  if (!designated.length) { designated = uniqEmails(sc.managers.map(m => m.email)); fallback = true; }
 
-  let app;
-  try { app = init(); } catch (e) { return res.status(500).json({ error: e.message }); }
-
-  // 1. who is asking?
-  const idToken = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  let caller;
-  try { caller = (await app.auth().verifyIdToken(idToken)).uid; }
-  catch { return res.status(401).json({ error: "not signed in" }); }
-
-  const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-  const { roomId, kind } = body;
-  if (kind === "update") return sendUpdate(app, caller, body, res);
-  if (!roomId || typeof roomId !== "string" || roomId.includes("/")) return res.status(400).json({ error: "bad roomId" });
-
-  // 2. they must be at that table
-  const db = app.firestore();
-  // card tables: Realtime Database when it's set up, otherwise Firestore
-  let room = null;
-  if (process.env.FIREBASE_DATABASE_URL) room = (await app.database().ref(`rooms/${roomId}`).get()).val();
-  if (!room) { const snap = await db.doc(`rooms/${roomId}`).get(); room = snap.exists ? snap.data() : null; }
-  if (!room) return res.status(404).json({ error: "no such room" });
-  room.playerIds = Array.isArray(room.playerIds) ? room.playerIds : Object.values(room.playerIds || {});
-  room.players = Array.isArray(room.players) ? room.players : Object.values(room.players || {});
-  if (!(room.playerIds || []).includes(caller)) return res.status(403).json({ error: "not at this table" });
-
-  // 3. decide who to tell
-  const msg = plan(kind, roomId, room, caller);
-  if (!msg || !msg.to.length) return res.json({ sent: 0 });
-
-  // 4. collect their phones
-  const phones = await db.getAll(...msg.to.map((u) => db.doc(`pushTokens/${u}`)));
-  const tokens = [], owner = [];
-  phones.forEach((u) => (u.get("tokens") || []).forEach((t) => { tokens.push(t); owner.push(u.id); }));
-  if (!tokens.length) return res.json({ sent: 0 });
-
-  // 5. send
-  const result = await app.messaging().sendEachForMulticast({
-    tokens,
-    notification: { title: msg.title, body: msg.body },
-    data: { roomId, kind },
-    android: {
-      priority: "high",
-      notification: { channelId: "turns", tag: `${roomId}-${kind}`, color: "#E8B64C", sound: "default" },
-    },
+  const period = `${fmt(r.fromDate)}${r.toDate !== r.fromDate ? ' to ' + fmt(r.toDate) : ''}`;
+  const full = await sendEmail({
+    to: designated, privateList: true, fromName: sc.orgName, replyTo: r.email, attachments: files,
+    subject: `[${r.type}] ${r.staffName} — ${period}`,
+    html: emailHtml({
+      base, brand: brandOf(sc), confidential: true, heading: `${label} report`,
+      intro: `${r.staffName} has reported ${label.toLowerCase()} through the staff portal.${fallback ? ` (No ${r.type} recipients are set for this company/department yet, so this was sent to the admins. Set them under Admin → Settings.)` : ''}`,
+      rows: [['Staff', `${r.staffName} (${r.staffId})`], ['Company', sc.orgName], ['Department', sc.deptName || r.deptName], ['Type', `${label} (${r.type})`],
+        ['From', fmt(r.fromDate)], ['To', fmt(r.toDate)], ['Days', String(r.days)], ['Reason', r.reason],
+        ['Attachments', files.length ? files.map(f => f.filename).join(', ') : expected ? 'Not included — ask the staff member to send them' : 'None'],
+        ['Not attached (too large / wrong type)', rejected.join(', ')], ['Staff email', r.email]]
+    })
   });
-
-  // 6. forget phones that uninstalled the app
-  const dead = {};
-  result.responses.forEach((r, i) => {
-    const code = r.error?.code || "";
-    if (code.includes("registration-token-not-registered") || code.includes("invalid-registration-token") || code.includes("invalid-argument")) {
-      (dead[owner[i]] ||= []).push(tokens[i]);
-    }
+  // short notice to admins who weren't already designated recipients
+  const notice = fallback ? null : await sendEmail({
+    to: sc.managerEmails().filter(e => !designated.includes(e)), privateList: true, fromName: sc.orgName,
+    subject: `[${r.type} notice] ${r.staffName} — ${period}`,
+    html: emailHtml({
+      base, brand: brandOf(sc), heading: `${r.type} reported`,
+      intro: `${r.staffName} reported ${label.toLowerCase()}. The full report and any certificate were sent only to the designated ${r.type} recipients.`,
+      rows: [['Staff', `${r.staffName} (${r.staffId})`], ['Department', sc.deptName || r.deptName], ['Period', period], ['Days', String(r.days)]],
+      button: { label: 'Open in admin', link: '/admin.html#reports' }
+    })
   });
-  await Promise.all(Object.entries(dead).map(([u, t]) =>
-    db.doc(`pushTokens/${u}`).update({ tokens: admin.firestore.FieldValue.arrayRemove(...t) }).catch(() => {})));
-
-  return res.json({ sent: result.successCount, failed: result.failureCount });
-};
-
-// Admin only: tell every phone with the app that a new version is out.
-async function sendUpdate(app, caller, body, res) {
-  const db = app.firestore();
-  if (!(await db.doc(`admins/${caller}`).get()).exists) return res.status(403).json({ error: "admins only" });
-  const all = await db.collection("pushTokens").get();
-  const tokens = [];
-  all.forEach((u) => (u.get("tokens") || []).forEach((t) => tokens.push(t)));
-  if (!tokens.length) return res.json({ sent: 0 });
-  const text = String(body.text || "").slice(0, 140) || "New features and fixes are ready. Open THAAS to update.";
-  let sent = 0, failed = 0;
-  for (let i = 0; i < tokens.length; i += 500) {
-    const r = await app.messaging().sendEachForMulticast({
-      tokens: tokens.slice(i, i + 500),
-      notification: { title: "🔄 THAAS update available", body: text },
-      data: { kind: "update", version: String(body.version || "") },
-      android: { priority: "high", notification: { channelId: "turns", tag: "thaas-update", color: "#E8B64C", sound: "default" } },
-    });
-    sent += r.successCount; failed += r.failureCount;
-  }
-  return res.json({ sent, failed });
+  const pushed = await pushAndInbox(sc.managerPush(), { base, title: `${r.type} reported: ${r.staffName}`, body: `${period} (${plural(r.days, 'day')})`, link: '/admin.html#reports' });
+  const result = merge(full, notice, pushed);
+  if (full.sent) await ref.update({ notifiedAt: FieldValue.serverTimestamp() });
+  else if (!full.error) result.errors.push('No one is set up to receive these reports yet. Ask your admin to add SL/FRL emails.');
+  return result;
 }
 
-module.exports.plan = plan; // for tests
+/* ---------- duty change requested ---------- */
+async function swapRequest(me, id, base) {
+  const { ref, data: w } = await load('swaps', id);
+  if (w.requesterUid !== me.uid) throw httpError(403, 'Not your request');
+  if (w.notifiedAt) return { skipped: 'already sent' };
+  const [sc, [target]] = await Promise.all([loadScope(w.orgId, w.deptId), getUsers([w.targetUid])]);
+  const duties = w.requesterDate === w.targetDate
+    ? [['Date', fmt(w.requesterDate)], [`${w.requesterName}'s duty`, w.requesterShift || '—'], [`${w.targetName}'s duty`, w.targetShift || '—']]
+    : [[`${w.requesterName} gives`, `${fmt(w.requesterDate)} — ${w.requesterShift || '—'}`], [`${w.targetName} gives`, `${fmt(w.targetDate)} — ${w.targetShift || '—'}`]];
+  const rows = [['Requested by', `${w.requesterName} (${w.requesterStaffId})`], ['Requested with', `${w.targetName} (${w.targetStaffId})`],
+    ['Department', sc.deptName], ['Level', w.level], ...duties, ['Reason', w.reason]];
+  const result = merge(
+    await sendEmail({ to: [target?.email], fromName: sc.orgName, replyTo: me.email, subject: `Duty change request from ${w.requesterName}`,
+      html: emailHtml({ base, brand: brandOf(sc), heading: 'Duty change request', intro: `${w.requesterName} has asked to change duty with you. Please accept or decline in the staff portal.`, rows, button: { label: 'Review request', link: '/swap.html' } }) }),
+    await sendEmail({ to: [...sc.recipients('swapEmails'), ...sc.managerEmails()].filter(e => e !== target?.email), privateList: true, fromName: sc.orgName,
+      subject: `[Duty change requested] ${w.requesterName} ⇄ ${w.targetName}`,
+      html: emailHtml({ base, brand: brandOf(sc), heading: 'Duty change requested', intro: `For information: ${w.requesterName} has requested a duty change with ${w.targetName}. It is waiting for ${w.targetName} to accept.`, rows, button: { label: 'Open in admin', link: '/admin.html#swaps' } }) }),
+    await pushAndInbox([target], { base, title: 'Duty change request', body: `${w.requesterName} wants to swap: ${fmt(w.requesterDate)}${w.targetDate !== w.requesterDate ? ' / ' + fmt(w.targetDate) : ''}`, link: '/swap.html' }),
+    await pushAndInbox(sc.managerPush().filter(a => a.uid !== w.targetUid && a.uid !== w.requesterUid), { base, title: 'Duty change requested', body: `${w.requesterName} ⇄ ${w.targetName} on ${fmt(w.requesterDate)}`, link: '/admin.html#swaps' })
+  );
+  await ref.update({ notifiedAt: FieldValue.serverTimestamp() });
+  return result;
+}
+
+/* ---------- annual leave ---------- */
+async function leaveRequest(me, id, base) {
+  const { ref, data: l } = await load('leaveRequests', id);
+  if (l.uid !== me.uid) throw httpError(403, 'Not your request');
+  if (l.notifiedAt) return { skipped: 'already sent' };
+  const sc = await loadScope(l.orgId, l.deptId);
+  const result = merge(
+    await sendEmail({ to: [...sc.recipients('leaveEmails'), ...sc.managerEmails()], privateList: true, fromName: sc.orgName, replyTo: l.email,
+      subject: `[Annual leave request] ${l.staffName} — ${fmt(l.fromDate)} to ${fmt(l.toDate)}`,
+      html: emailHtml({ base, brand: brandOf(sc), heading: 'Annual leave request', intro: `${l.staffName} has requested annual leave. It is waiting for approval.`,
+        rows: [['Staff', `${l.staffName} (${l.staffId})`], ['Department', sc.deptName], ['From', fmt(l.fromDate)], ['To', fmt(l.toDate)], ['Days', String(l.days)], ['Note', l.reason]],
+        button: { label: 'Approve or reject', link: '/admin.html#leave' } }) }),
+    await pushAndInbox(sc.managerPush(), { base, title: `Leave request: ${l.staffName}`, body: `${fmt(l.fromDate)} → ${fmt(l.toDate)} (${plural(l.days, 'day')})`, link: '/admin.html#leave' })
+  );
+  await ref.update({ notifiedAt: FieldValue.serverTimestamp() });
+  return result;
+}
+async function leaveDecision(me, id, base) {
+  const { data: l } = await load('leaveRequests', id);
+  requireMgr(me, l.orgId, l.deptId);
+  const [sc, [staff]] = await Promise.all([loadScope(l.orgId, l.deptId), getUsers([l.uid])]);
+  const word = { approved: 'approved', rejected: 'not approved', revoked: 'revoked' }[l.status] || l.status;
+  return merge(
+    await sendEmail({ to: [staff?.email || l.email], fromName: sc.orgName, subject: `Your annual leave (${fmt(l.fromDate)} – ${fmt(l.toDate)}) was ${word}`,
+      html: emailHtml({ base, brand: brandOf(sc), heading: `Leave ${word}`, intro: `Your annual leave request has been ${word} by ${me.name}.`,
+        rows: [['From', fmt(l.fromDate)], ['To', fmt(l.toDate)], ['Days', String(l.days)], ['Comment', l.adminComment]], button: { label: 'View my leave', link: '/leave.html' } }) }),
+    await pushAndInbox([staff], { base, title: `Leave ${word}`, body: `${fmt(l.fromDate)} → ${fmt(l.toDate)}${l.adminComment ? ' · ' + l.adminComment : ''}`, link: '/leave.html' })
+  );
+}
+
+/* ---------- roster published / changed ---------- */
+async function roster(me, body, base) {
+  const { rosterId, changes = {}, isNew } = body;
+  const [orgId, deptId, month] = String(rosterId || '').split('__');
+  if (!orgId || !deptId || !/^\d{4}-\d{2}$/.test(month || '')) throw httpError(400, 'Bad roster');
+  requireMgr(me, orgId, deptId);
+  const r = await db().doc(`rosters/${rosterId}`).get();
+  if (!r.exists) throw httpError(404, 'Roster not found');
+  const rows = r.data().rows || {}, legend = r.data().legend || {};
+  const sc = await loadScope(orgId, deptId);
+  const monthName = new Date(month + '-01T00:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  // only people who really are in this company + department
+  const staff = (await getUsers(Object.keys(changes).slice(0, 500))).filter(u => u.orgId === orgId && u.deptId === deptId && u.status === 'active');
+  const results = [];
+  for (const u of staff) {
+    const dates = (changes[u.uid] || []).filter(d => typeof d === 'string' && d.startsWith(month)).sort();
+    const lines = dates.slice(0, 31).map(d => { const c = rows[u.uid]?.[Number(d.slice(8)) - 1] || ''; return [fmt(d), c ? `${c}${legend[c] ? ' — ' + legend[c] : ''}` : 'No duty']; });
+    const title = isNew ? `Roster published: ${monthName}` : `Your duties changed: ${monthName}`;
+    results.push(await sendEmail({ to: [u.email], fromName: sc.orgName, subject: title,
+      html: emailHtml({ base, brand: brandOf(sc), heading: title, intro: isNew ? `The ${sc.deptName} duty roster for ${monthName} has been published.` : `Your duties were updated on ${plural(dates.length, 'day')}.`,
+        rows: isNew ? [] : lines, button: { label: 'View roster', link: `/roster.html?m=${month}` } }) }));
+  }
+  results.push(await pushAndInbox(staff, { base, title: isNew ? `Roster published: ${monthName}` : `Roster updated: ${monthName}`, body: isNew ? 'Tap to view your duties.' : 'Your duties have changed. Tap to view.', link: `/roster.html?m=${month}` }));
+  return merge(results);
+}
+
+/* ---------- new registration → tell that company/department's admins ---------- */
+async function registered(me, base) {
+  if (me.status !== 'pending' || me.registrationNotified) return { skipped: true };
+  const sc = await loadScope(me.orgId, me.deptId);
+  const r = merge(await pushAndInbox(sc.managers, { base, title: 'New staff registration', body: `${me.name} (${me.staffId}) · ${sc.deptName} is waiting for approval`, link: '/admin.html#staff' }));
+  await db().doc(`users/${me.uid}`).update({ registrationNotified: true });
+  return r;
+}
+
+async function test(me, body, base) {
+  if (!['admin', 'deptadmin', 'super'].includes(me.role)) throw httpError(403, 'Admins only');
+  const orgId = me.role === 'super' ? body.orgId : me.orgId;
+  const deptId = me.role === 'deptadmin' ? me.deptId : body.deptId || null;
+  let sc = null;
+  if (orgId) { requireMgr(me, orgId, deptId || me.deptId); sc = await loadScope(orgId, deptId); }
+  const brand = sc ? brandOf(sc) : undefined;
+  const lists = sc ? ['slEmails', 'frlEmails', 'leaveEmails', 'swapEmails'].map(k => [k.replace('Emails', '').toUpperCase(), sc.recipients(k).join(', ') || 'none set']) : [];
+  return merge(
+    await sendEmail({ to: [me.email], fromName: sc?.orgName, subject: 'Staff portal test email',
+      html: emailHtml({ base, brand, heading: 'It works!', intro: 'Email notifications from the staff portal are set up correctly. These are the lists that will receive emails:', rows: lists, button: { label: 'Open portal', link: '/admin.html' } }) }),
+    await pushAndInbox([me], { base, title: 'Test notification', body: 'Push notifications are working.', link: '/admin.html#settings' })
+  );
+}
+
+const handler = withAuth(async ({ me, body, base }) => {
+  if (me.status === 'pending' && body.event !== 'registered') throw httpError(403, 'Account is not active');
+  switch (body.event) {
+    case 'report': return report(me, body.id, base, body.files);
+    case 'swap_request': return swapRequest(me, body.id, base);
+    case 'leave_request': return leaveRequest(me, body.id, base);
+    case 'leave_decision': return leaveDecision(me, body.id, base);
+    case 'roster': return roster(me, body, base);
+    case 'registered': return registered(me, base);
+    case 'test': return test(me, body, base);
+    default: throw httpError(400, 'Unknown event');
+  }
+}, { allowPending: true });
+export default handler;
