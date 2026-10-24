@@ -12,7 +12,7 @@
 <header id="topbar"></header>
 <div id="loading" class="spinner-page">Loading…</div>
 <main class="wrap" id="main" hidden>
-  <div class="page-head"><div><h1>Annual leave</h1><p class="sub">Check how many leave slots are open on each day, then send your request.</p></div></div>
+  <div class="page-head"><div><h1>Annual leave</h1><p class="sub">Your leave is marked in blue. You can also see who else in your unit is off, and how many leave slots are open each day.</p></div></div>
 
   <div class="grid g3">
     <div class="card stat"><div class="k">Entitlement</div><div class="v" id="sEnt">—</div></div>
@@ -29,6 +29,7 @@
       </div>
       <div class="cal" id="cal"></div>
       <div id="calLegend"></div>
+      <label class="check small" style="margin-top:8px"><input type="checkbox" id="showTeam" checked> Show who else in my unit is on leave</label>
       <p class="small muted" style="margin-bottom:0">Tap a start day, then an end day, to fill in the request form.</p>
     </div>
     <div class="card">
@@ -45,14 +46,19 @@
     </div>
   </div>
 
+  <div class="card" style="margin-bottom:16px">
+    <h2>My upcoming leave</h2>
+    <div id="upcoming"><div class="empty">Loading…</div></div>
+  </div>
+
   <div class="card">
-    <h2>My requests</h2>
+    <h2>All my leave &amp; requests</h2>
     <div class="table-wrap"><table><thead><tr><th>Dates</th><th>Days</th><th>Note</th><th>Status</th><th>Admin comment</th><th></th></tr></thead><tbody id="mine"></tbody></table></div>
   </div>
 </main>
 <script type="module">
   import { requireUser, db, $, $$, esc, fmtShort, pill, plural, today, dateRange, toast, busy, api, byNewest, calendarHTML, CAL_LEGEND, dayStatus, calId,
-    collection, doc, getDoc, addDoc, getDocs, updateDoc, query, where, serverTimestamp, APP_NAME } from '/js/app.js';
+    collection, doc, addDoc, updateDoc, query, where, serverTimestamp, cachedDoc, cachedDocs, freshly, APP_NAME } from '/js/app.js';
   document.title = `Annual Leave · ${APP_NAME}`;
   const { user, profile, dept } = await requireUser();
 
@@ -60,17 +66,33 @@
   $('#sEnt').textContent = plural(ent, 'day'); $('#sTaken').textContent = plural(taken, 'day');
   $('#sLeft').textContent = plural(Math.max(ent - taken, 0), 'day');
   $('#calLegend').innerHTML = CAL_LEGEND;
+  $('#showTeam').onchange = () => drawCal();
+
+  // my own leave (for highlighting the calendar)
+  let myList = [];
+  function mine() {
+    const approved = new Set(), pending = new Set();
+    myList.forEach(l => { const set = l.status === 'approved' ? approved : l.status === 'pending' ? pending : null; if (set) dateRange(l.fromDate, l.toDate).forEach(d => set.add(d)); });
+    return { approved, pending };
+  }
+  function drawUpcoming() {
+    const up = myList.filter(l => l.status === 'approved' && l.toDate >= today()).sort((a, b) => a.fromDate.localeCompare(b.fromDate));
+    $('#upcoming').innerHTML = up.length ? up.map(l => `<div class="list-item"><div><strong>${fmtShort(l.fromDate)} – ${fmtShort(l.toDate)}</strong> <span class="muted small">${plural(l.days, 'day')}</span>
+      <div class="small muted">${l.allocated ? `Allocated by ${esc(l.decidedBy || 'admin')}` : 'Your request, approved'}${l.adminComment ? ' · ' + esc(l.adminComment) : ''}</div></div>${pill('approved')}</div>`).join('')
+      : '<div class="empty">No upcoming leave.</div>';
+  }
 
   // calendar
   const cals = new Map();
-  const getCal = async y => { if (!cals.has(y)) { const s = await getDoc(doc(db, 'leaveCalendar', calId(y))).catch(() => null); if (!s?.exists()) { cals.set(y, {}); return cals.get(y); }; cals.set(y, s.exists() ? s.data() : {}); } return cals.get(y); };
+  const getCal = async y => { if (!cals.has(y)) cals.set(y, (await cachedDoc(doc(db, 'leaveCalendar', calId(y))).catch(() => null)) || {}); return cals.get(y); };
   let view = new Date(); view.setDate(1);
   let pick = null;
   async function drawCal() {
     const y = view.getFullYear(), m = view.getMonth();
     $('#calTitle').textContent = view.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     const sel = new Set(dateRange($('#from').value, $('#to').value));
-    $('#cal').innerHTML = calendarHTML(y, m, await getCal(y), sel);
+    const myLv = mine();
+    $('#cal').innerHTML = calendarHTML(y, m, await getCal(y), sel, { names: $('#showTeam').checked, meUid: user.uid, mine: myLv.approved, minePending: myLv.pending });
     $$('#cal .day[data-date]').forEach(b => b.onclick = () => {
       const d = b.dataset.date;
       if (!pick || d < pick) { pick = d; $('#from').value = $('#to').value = d; }
@@ -107,24 +129,24 @@
         fromDate: from, toDate: to, days, reason: $('#reason').value.trim(), status: 'pending', createdAt: serverTimestamp()
       });
       try { await api('/api/notify', { event: 'leave_request', id: ref.id }); } catch (err) { toast('Saved, but notification failed: ' + err.message, 'bad'); }
-      toast('Leave request sent for approval.', 'ok'); $('#reason').value = ''; loadMine();
+      toast('Leave request sent for approval.', 'ok'); $('#reason').value = ''; freshly(loadMine);
     } catch (err) { toast(err.message, 'bad'); }
     busy(b, false);
   };
 
   async function loadMine() {
-    const s = await getDocs(query(collection(db, 'leaveRequests'), where('uid', '==', user.uid)));
-    const list = s.docs.map(d => ({ id: d.id, ...d.data() })).sort(byNewest);
+    const list = (await cachedDocs('myLeave', query(collection(db, 'leaveRequests'), where('uid', '==', user.uid)))).sort(byNewest);
+    myList = list; drawCal(); drawUpcoming();
     const pend = list.filter(r => r.status === 'pending').reduce((a, r) => a + r.days, 0);
     $('#sPend').textContent = pend ? `${plural(pend, 'day')} awaiting approval` : '';
     $('#mine').innerHTML = list.length ? list.map(r => `<tr><td>${fmtShort(r.fromDate)} – ${fmtShort(r.toDate)}</td><td>${r.days}</td>
-      <td>${esc(r.reason || '')}</td><td>${pill(r.status)}</td><td>${esc(r.adminComment || '')}</td>
+      <td>${r.allocated ? `<strong>Allocated by ${esc(r.decidedBy || 'admin')}</strong>${r.countsAgainst === false ? '<div class="small muted">does not count against your days</div>' : ''}` : esc(r.reason || '')}</td><td>${pill(r.status)}</td><td>${esc(r.adminComment || '')}</td>
       <td>${r.status === 'pending' ? `<button class="btn ghost sm" data-cancel="${r.id}">Cancel</button>` : ''}</td></tr>`).join('')
       : '<tr><td colspan="6" class="empty">No requests yet.</td></tr>';
     $$('[data-cancel]').forEach(b => b.onclick = async () => {
       if (!confirm('Cancel this leave request?')) return;
       await updateDoc(doc(db, 'leaveRequests', b.dataset.cancel), { status: 'cancelled', updatedAt: serverTimestamp() });
-      toast('Request cancelled.'); loadMine();
+      toast('Request cancelled.'); freshly(loadMine);
     });
   }
   loadMine();
