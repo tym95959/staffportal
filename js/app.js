@@ -211,7 +211,12 @@ export function dayStatus(cal, d) {
   const state = q === null || q === undefined ? 'unset' : q === 0 ? 'closed' : b >= q ? 'full' : 'open';
   return { q, b, state, left: q ? Math.max(q - b, 0) : null };
 }
-export function calendarHTML(year, month, cal, sel = new Set()) {
+/**
+ * opts.names  — show who is on leave each day (from cal.onLeave = {date: {uid: name}})
+ * opts.mine   — Set of dates you have approved leave;  opts.minePending — dates you asked for
+ * opts.meUid  — your uid (so your own name isn't repeated)
+ */
+export function calendarHTML(year, month, cal, sel = new Set(), opts = {}) {
   const first = new Date(year, month, 1);
   const lead = (first.getDay() + 6) % 7; // Monday first
   const n = new Date(year, month + 1, 0).getDate();
@@ -221,13 +226,19 @@ export function calendarHTML(year, month, cal, sel = new Set()) {
   for (let i = 1; i <= n; i++) {
     const d = `${year}-${pad(month + 1)}-${pad(i)}`;
     const s = dayStatus(cal, d);
-    const txt = s.state === 'unset' ? (s.b ? `${s.b} on leave` : '') : s.state === 'closed' ? 'No leave' : `${s.b}/${s.q} taken`;
-    h += `<button type="button" class="day ${s.state === 'unset' ? '' : s.state} ${sel.has(d) ? 'sel' : ''} ${d === t ? 'today' : ''}" data-date="${d}">
-      <div class="n">${i}</div><div class="q">${txt}</div></button>`;
+    const txt = s.state === 'unset' ? (s.b && !opts.names ? `${s.b} on leave` : '') : s.state === 'closed' ? 'No leave' : `${s.b}/${s.q} taken`;
+    const mine = opts.mine?.has(d), minePend = opts.minePending?.has(d);
+    let who = '';
+    if (opts.names) {
+      const people = Object.entries(cal?.onLeave?.[d] || {}).filter(([u, nm]) => nm && u !== opts.meUid).map(([, nm]) => String(nm).split(' ')[0]);
+      if (people.length) who = `<div class="who">${people.slice(0, 2).map(esc).join(', ')}${people.length > 2 ? ` +${people.length - 2}` : ''}</div>`;
+    }
+    h += `<button type="button" class="day ${s.state === 'unset' ? '' : s.state} ${sel.has(d) ? 'sel' : ''} ${d === t ? 'today' : ''} ${mine ? 'mine' : minePend ? 'mine-pend' : ''}" data-date="${d}">
+      <div class="n">${i}${mine ? ' <span class="you">You</span>' : minePend ? ' <span class="you pend">?</span>' : ''}</div><div class="q">${txt}</div>${who}</button>`;
   }
   return h;
 }
-export const CAL_LEGEND = `<div class="legend"><span><i style="background:var(--ok-soft)"></i>Slots available</span>
+export const CAL_LEGEND = `<div class="legend"><span><i style="background:#2563eb"></i>Your leave</span><span><i style="background:#f59e0b"></i>Your request (pending)</span><span><i style="background:var(--ok-soft)"></i>Slots available</span>
   <span><i style="background:var(--bad-soft)"></i>Fully booked</span><span><i style="background:#eceeee"></i>No leave allowed</span>
   <span><i style="background:#fff"></i>Not set by admin</span></div>`;
 
@@ -366,6 +377,8 @@ export function requireUser({ admin = false } = {}) {
       // the App admin works only in the admin area
       if (profile.role === 'super' && !admin && !location.pathname.endsWith('password.html')) { location.href = '/admin.html'; return; }
       if (admin && !isManager(profile)) { location.href = '/dashboard.html'; return; }
+      // account added by an admin with a temporary password → choose your own first
+      if (profile.mustChangePassword && !location.pathname.endsWith('password.html')) { location.href = '/password.html?first=1'; return; }
       // company + unit context
       ctx.orgId = profile.orgId || null; ctx.deptId = profile.deptId || null;
       if (ctx.orgId) {
