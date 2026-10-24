@@ -49,7 +49,7 @@
     <div class="card">
       <div class="row-between" style="margin-bottom:12px">
         <h2 style="margin:0">Staff accounts</h2>
-        <div class="actions"><select id="staffFilter" style="width:auto"><option value="">All</option><option value="pending">Pending approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select>
+        <div class="actions"><button type="button" class="btn sm" id="addStaffBtn">+ Add staff</button><select id="staffFilter" style="width:auto"><option value="">All</option><option value="pending">Pending approval</option><option value="active">Active</option><option value="disabled">Disabled</option></select>
         <input id="staffSearch" placeholder="Search" style="width:200px"></div>
       </div>
       <div class="table-wrap"><table><thead><tr><th>Name</th><th>Staff ID</th><th>Unit</th><th>Level</th><th>Role</th><th>Status</th><th>AL</th><th>Push</th><th></th></tr></thead><tbody id="staffBody"></tbody></table></div>
@@ -91,8 +91,21 @@
         <div id="calLegend"></div>
         <div id="onLeave" class="small" style="margin-top:12px"></div>
       </div>
+      <div>
+      <form class="card" id="allocForm" style="margin-bottom:16px">
+        <h2>Allocate annual leave</h2>
+        <p class="small muted" style="margin-top:0">Put leave on the calendar for a staff member. It's approved straight away, they're notified, and staff can see it on their Annual Leave page. It shows as AL in the roster. Tap a start and end day on the calendar to fill the dates.</p>
+        <div class="field"><label for="alStaff">Staff member</label><select id="alStaff" required></select><div class="hint" id="alBal"></div></div>
+        <div class="row"><div class="field"><label for="alFrom">From</label><input type="date" id="alFrom" required></div>
+          <div class="field"><label for="alTo">To</label><input type="date" id="alTo" required></div></div>
+        <div class="small" id="alInfo" style="margin:-6px 0 10px"></div>
+        <div class="field"><label for="alNote">Note (optional)</label><input id="alNote" placeholder="e.g. Annual leave plan 2026"></div>
+        <label class="check"><input type="checkbox" id="alCount" checked> Count against their annual leave entitlement</label>
+        <label class="check"><input type="checkbox" id="alNotify" checked> Notify them (email + push)</label>
+        <button class="btn" id="alSave" style="margin-top:8px">Allocate leave</button>
+      </form>
       <div class="card">
-        <h2>Set leave allocation</h2>
+        <h2>Leave slots per day</h2>
         <p class="small muted">How many staff of <strong class="deptNameTxt"></strong> may be on annual leave each day. Tap a start and end day on the calendar, or type the dates. Use 0 to block leave.</p>
         <form id="quotaForm">
           <div class="row"><div class="field"><label for="qFrom">From</label><input type="date" id="qFrom" required></div>
@@ -106,6 +119,7 @@
           <div class="field"><label for="defQ">Default allocation for <span id="defYear"></span></label><input type="number" id="defQ" min="0" placeholder="Leave empty = not set"><div class="hint">Used for any day without its own allocation.</div></div>
           <button class="btn ghost">Save default</button>
         </form>
+      </div>
       </div>
     </div>
   </section>
@@ -296,6 +310,11 @@
       <div class="field" id="fUnitsWrap" hidden><label>Unit admin of</label><div class="actions" id="fUnits"></div><div class="hint">Their own unit is always included. Tick any other units they should manage.</div></div>
       <p class="small muted" id="fRoleHint" style="margin:0 0 6px"></p>
       <p class="small muted" id="fEmail" style="margin:0"></p>
+      <p style="margin:10px 0 0"><button type="button" class="btn ghost sm" id="fReset">✉ Send password reset email</button> <span class="small muted">They get a link to choose a new password.</span></p>
+      <div class="danger-zone" id="fRemoveWrap">
+        <div><strong>Remove from the portal</strong><div class="small muted">Deletes their sign-in and profile for good. Past reports, leave and rosters are kept as records. To block them only for a while, set Status to Disabled instead.</div></div>
+        <button type="button" class="btn bad sm" id="fRemove">🗑 Remove staff</button>
+      </div>
     </div>
     <div class="dlg-foot"><button type="button" class="btn ghost" id="dlgCancel">Cancel</button><button class="btn" id="dlgSave" value="save">Save</button></div>
   </form>
@@ -338,6 +357,38 @@
       <button class="btn" id="rulesSave">Save rules</button>
     </form>
   </div>
+</dialog>
+
+<!-- add a staff member directly -->
+<dialog id="addDlg">
+  <form id="addForm" method="dialog">
+    <div class="dlg-body">
+      <h2>Add staff</h2>
+      <div id="addFields">
+        <p class="small muted" style="margin-top:0">Creates their sign-in straight away (no approval needed) with a temporary password. They choose their own password the first time they sign in.</p>
+        <div class="row"><div class="field"><label for="aName">Full name</label><input id="aName" required></div>
+          <div class="field"><label for="aStaffId">Staff ID</label><input id="aStaffId" required style="text-transform:uppercase"></div></div>
+        <div class="row"><div class="field"><label for="aEmail">Email (used to sign in)</label><input id="aEmail" type="email" required></div>
+          <div class="field"><label for="aPhone">Mobile</label><input id="aPhone" type="tel"></div></div>
+        <div class="row"><div class="field"><label for="aDept">Unit</label><select id="aDept" required></select></div>
+          <div class="field"><label for="aDesig">Designation</label><input id="aDesig"></div></div>
+        <div class="row r3"><div class="field"><label for="aLevel">Duty level / grade</label><input id="aLevel" list="levels" placeholder="e.g. Level 2"></div>
+          <div class="field"><label for="aRole">Role</label><select id="aRole"></select></div>
+          <div class="field"><label for="aEnt">AL entitlement</label><input id="aEnt" type="number" min="0"></div></div>
+        <div class="field" id="aUnitsWrap" hidden><label>Unit admin of</label><div class="actions" id="aUnits"></div></div>
+        <label class="check"><input type="checkbox" id="aSend" checked> Email them their sign-in details</label>
+      </div>
+      <div id="addDone" hidden>
+        <div class="banner" style="display:block">
+          <strong id="addDoneName"></strong> has been added.
+          <div style="margin-top:10px">Temporary password: <code id="addPw" style="font-size:16px;padding:4px 10px"></code> <button type="button" class="btn ghost sm" id="addCopy">Copy</button></div>
+          <div class="small" id="addMailed" style="margin-top:8px"></div>
+        </div>
+        <p class="small muted">They sign in at the portal with their email and this password, then choose their own. You won't be able to see this password again — use “Send password reset email” in Staff → Edit if it gets lost.</p>
+      </div>
+    </div>
+    <div class="dlg-foot"><button type="button" class="btn ghost" id="addCancel">Close</button><button type="button" class="btn ghost" id="addAnother" hidden>Add another</button><button class="btn" id="addSave" value="save">Add staff</button></div>
+  </form>
 </dialog>
 
 <!-- roster: pick a shift for one cell -->
