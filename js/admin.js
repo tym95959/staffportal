@@ -5,6 +5,8 @@ import {
   collection, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, query, where, writeBatch, serverTimestamp, increment, deleteField
 } from '/js/app.js';
 import { initRosterEditor, shiftEditor, DEFAULT_SHIFTS } from '/js/roster-editor.js';
+import { sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import { auth } from '/js/app.js';
 
 document.title = `Admin · ${APP_NAME}`;
 const { user, profile } = await requireUser({ admin: true });
@@ -167,6 +169,8 @@ function openStaff(id, approve) {
   set('fEnt', u.alEntitlement ?? self.DEFAULT_AL_DAYS ?? 30); set('fTaken', u.alTaken || 0);
   $('#fRoleHint').textContent = 'Unit admin: manages their unit(s) — staff, roster, rules, shifts and email lists. Company admin: manages the whole company.';
   $('#fEmail').textContent = `Email: ${u.email} · Registered ${fmtTs(u.createdAt)}`;
+  $('#fRemoveWrap').hidden = u.id === user.uid;
+  $('#fRemove').textContent = u.status === 'pending' ? '🗑 Reject & remove' : '🗑 Remove staff';
   drawUnitsPick();
   $('#staffDlg').showModal();
 }
@@ -194,6 +198,72 @@ $('#staffForm').onsubmit = async e => {
   } catch (err) { toast(err.code === 'permission-denied' ? 'You do not have permission to make that change.' : err.message, 'bad'); }
   busy(b, false);
 };
+$('#fReset').onclick = async () => {
+  const u = editing; if (!u?.email) return;
+  if (!confirm(`Send a password reset email to ${u.email}?`)) return;
+  try { await sendPasswordResetEmail(auth, u.email); toast(`Reset email sent to ${u.email}. (Check spam if it doesn't arrive.)`, 'ok', 7000); }
+  catch (e) { toast(e.message, 'bad'); }
+};
+
+$('#fRemove').onclick = async () => {
+  const u = editing; if (!u) return;
+  const typed = prompt(`Remove ${u.name} (${u.staffId || u.email}) from the portal?\n\nTheir sign-in and profile are deleted for good. Pending leave requests and duty changes are cancelled. Past records are kept.\n\nType REMOVE to confirm:`);
+  if (typed === null) return;
+  if (typed.trim().toUpperCase() !== 'REMOVE') return toast('Not removed — you need to type REMOVE.', 'bad');
+  const b = $('#fRemove'); busy(b, true, 'Removing…');
+  try {
+    const r = await api('/api/staff', { action: 'remove', uid: u.id });
+    $('#staffDlg').close();
+    toast(`${r.name} removed.${r.cancelled ? ` ${plural(r.cancelled, 'pending request')} cancelled.` : ''}`, 'ok', 6000);
+    await invalidate('users', 'dir:', 'leaves', 'swaps'); await freshly(loadUsers); drawStaff();
+  } catch (err) { toast(err.message, 'bad', 8000); }
+  busy(b, false);
+};
+
+/* ---- add a staff member directly ---- */
+const myUnits = () => UNITADMIN ? S.depts.filter(d => MY_UNITS.includes(d.id)) : S.depts.filter(d => d.active !== false);
+function drawAddUnits() {
+  const show = ORGADMIN && $('#aRole').value === 'deptadmin';
+  $('#aUnitsWrap').hidden = !show;
+  if (show) $('#aUnits').innerHTML = S.depts.filter(d => d.id !== $('#aDept').value).map(d => `<label class="check" style="margin:0 10px 0 0"><input type="checkbox" value="${d.id}"> ${esc(d.name)}</label>`).join('') || '<span class="muted small">No other units.</span>';
+}
+function resetAddForm() {
+  $('#addForm').reset();
+  $('#aDept').innerHTML = myUnits().map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+  if (S.deptId) $('#aDept').value = S.deptId;
+  $('#aRole').innerHTML = assignable.map(r => `<option value="${r}">${ROLE_LABEL[r]}</option>`).join('');
+  $('#aEnt').value = S.org?.defaultAL ?? 30; $('#aSend').checked = true;
+  $('#addFields').hidden = false; $('#addDone').hidden = true; $('#addSave').hidden = false; $('#addAnother').hidden = true;
+  drawAddUnits();
+}
+$('#addStaffBtn').onclick = () => {
+  if (!myUnits().length) return toast('Add a unit first (Units tab).', 'bad');
+  resetAddForm(); $('#addDlg').showModal(); $('#aName').focus();
+};
+$('#aRole').onchange = drawAddUnits; $('#aDept').onchange = drawAddUnits;
+$('#addCancel').onclick = () => $('#addDlg').close();
+$('#addAnother').onclick = () => { resetAddForm(); $('#aName').focus(); };
+$('#addCopy').onclick = async () => { try { await navigator.clipboard.writeText($('#addPw').textContent); toast('Copied.', 'ok'); } catch {} };
+$('#addForm').onsubmit = async e => {
+  e.preventDefault();
+  const v = id => $('#' + id).value.trim();
+  const b = $('#addSave'); busy(b, true, 'Adding…');
+  try {
+    const r = await api('/api/staff', {
+      action: 'create', orgId: S.orgId, deptId: v('aDept'), name: v('aName'), staffId: v('aStaffId'), email: v('aEmail'), phone: v('aPhone'),
+      designation: v('aDesig'), level: v('aLevel'), role: v('aRole'), alEntitlement: v('aEnt'), sendEmail: $('#aSend').checked,
+      units: $$('#aUnits input:checked').map(c => c.value)
+    });
+    $('#addDoneName').textContent = `${v('aName')} (${v('aStaffId').toUpperCase()})`;
+    $('#addPw').textContent = r.tempPassword;
+    $('#addMailed').innerHTML = r.emailed ? `✓ Sign-in details emailed to ${esc(v('aEmail'))}.`
+      : $('#aSend').checked ? `<span style="color:var(--bad)">The email could not be sent${r.emailError ? ' (' + esc(r.emailError) + ')' : ''}. Give them the password yourself.</span>` : 'No email sent — give them the password yourself.';
+    $('#addFields').hidden = true; $('#addDone').hidden = false; $('#addSave').hidden = true; $('#addAnother').hidden = false;
+    await invalidate('users', 'dir:'); await freshly(loadUsers); drawStaff();
+  } catch (err) { toast(err.message, 'bad', 8000); }
+  busy(b, false);
+};
+
 $('#staffFilter').onchange = drawStaff; $('#staffSearch').oninput = drawStaff;
 loaders.staff = async () => { await loadUsers(); drawStaff(); };
 
@@ -266,16 +336,19 @@ async function decideLeave(id, decision, btn) {
     batch.update(doc(db, 'leaveRequests', id), { status: decision, adminComment: comment.trim(), decidedBy: profile.name || profile.email, decidedAt: serverTimestamp() });
     const sign = decision === 'approved' ? 1 : decision === 'revoked' ? -1 : 0;
     if (sign) {
-      batch.update(doc(db, 'users', l.uid), { alTaken: increment(sign * l.days) });
+      if (l.countsAgainst !== false) batch.update(doc(db, 'users', l.uid), { alTaken: increment(sign * l.days) });
+      // booked slots + the leave plan staff can see (who is off which day)
+      const shortName = String(l.staffName || '').split(/\s+/).slice(0, 2).join(' ');
       const byYear = {};
-      dateRange(l.fromDate, l.toDate).forEach(d => (byYear[d.slice(0, 4)] ||= {})[d] = increment(sign));
-      Object.entries(byYear).forEach(([y, booked]) => batch.set(doc(db, 'leaveCalendar', calId(y, l.orgId, l.deptId)), { orgId: l.orgId, deptId: l.deptId, booked }, { merge: true }));
+      dateRange(l.fromDate, l.toDate).forEach(d => { const y = byYear[d.slice(0, 4)] ||= { booked: {}, onLeave: {} }; y.booked[d] = increment(sign); y.onLeave[d] = { [l.uid]: sign > 0 ? shortName : deleteField() }; });
+      Object.entries(byYear).forEach(([y, v]) => batch.set(doc(db, 'leaveCalendar', calId(y, l.orgId, l.deptId)), { orgId: l.orgId, deptId: l.deptId, ...v }, { merge: true }));
     }
     await batch.commit();
     calCache.clear(); await invalidate('leaveCalendar/', 'leave:', 'leaves:', 'users');
     await notifySoft({ event: 'leave_decision', id });
     toast(`Leave ${decision}.`, 'ok');
-    await freshly(() => Promise.all([loadLeaves(), loadUsers()])); drawLeaves();
+    await freshly(() => Promise.all([loadLeaves(), loadUsers()]));
+    if (current === 'calendar') { drawCal(); showOnLeave(lastDay); fillAllocStaff(); } else drawLeaves();
   } catch (e) { toast(e.message, 'bad'); busy(btn, false); }
 }
 $('#leaveFilter').onchange = drawLeaves;
@@ -286,24 +359,74 @@ function refreshBadges() { if (!S.orgId) return; loadLeaves().catch(() => {}); l
 let calView = new Date(); calView.setDate(1);
 let calPick = null;
 $('#calLegend').innerHTML = CAL_LEGEND;
+let lastDay = today();
 async function drawCal() {
   const y = calView.getFullYear(), m = calView.getMonth();
   $('#calTitle').textContent = calView.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   $('#defYear').textContent = y;
   const cal = await getCal(y);
   $('#defQ').value = cal.defaultQuota ?? '';
-  $('#cal').innerHTML = calendarHTML(y, m, cal, new Set(dateRange($('#qFrom').value, $('#qTo').value)));
+  if (!leaves.length) await loadLeaves().catch(() => {});
+  // names on the calendar come from the approved leave list (includes leave approved before the plan existed)
+  const onLeave = {};
+  leaves.filter(l => l.deptId === S.deptId && l.status === 'approved').forEach(l => dateRange(l.fromDate, l.toDate).forEach(d => (onLeave[d] ||= {})[l.uid] = l.staffName));
+  const sel = new Set(dateRange($('#alFrom').value || $('#qFrom').value, $('#alTo').value || $('#qTo').value));
+  $('#cal').innerHTML = calendarHTML(y, m, { ...cal, onLeave }, sel, { names: true });
   $$('#cal .day[data-date]').forEach(b => b.onclick = () => {
     const d = b.dataset.date;
-    if (!calPick || d < calPick) { calPick = d; $('#qFrom').value = $('#qTo').value = d; } else { $('#qTo').value = d; calPick = null; }
-    showOnLeave(d); drawCal();
+    if (!calPick || d < calPick) { calPick = d; $('#qFrom').value = $('#qTo').value = $('#alFrom').value = $('#alTo').value = d; }
+    else { $('#qTo').value = $('#alTo').value = d; calPick = null; }
+    showOnLeave(d); allocInfo(); drawCal();
   });
 }
 async function showOnLeave(d) {
+  lastDay = d;
   if (!leaves.length) await loadLeaves();
   const on = leaves.filter(l => l.deptId === S.deptId && (l.status === 'approved' || l.status === 'pending') && l.fromDate <= d && l.toDate >= d);
-  $('#onLeave').innerHTML = `<strong>${fmtShort(d)}:</strong> ` + (on.length ? on.map(l => `${esc(l.staffName)} ${l.status === 'pending' ? '<span class="muted">(pending)</span>' : ''}`).join(', ') : '<span class="muted">nobody on leave</span>');
+  $('#onLeave').innerHTML = `<strong>On leave ${fmtShort(d)}:</strong>` + (on.length ? `<ul class="leave-people">${on.map(l => `<li><span><strong>${esc(l.staffName)}</strong> <span class="muted">${fmtShort(l.fromDate)} – ${fmtShort(l.toDate)}${l.allocated ? ' · allocated' : ''}</span> ${l.status === 'pending' ? pill('pending') : ''}</span>
+      ${l.status === 'approved' ? `<button type="button" class="btn ghost sm" data-revoke="${l.id}">Remove</button>` : `<button type="button" class="btn ok sm" data-approve-lv="${l.id}">Approve</button>`}</li>`).join('')}</ul>`
+    : ' <span class="muted">nobody</span>');
+  $$('#onLeave [data-revoke]').forEach(b => b.onclick = () => decideLeave(b.dataset.revoke, 'revoked', b));
+  $$('#onLeave [data-approve-lv]').forEach(b => b.onclick = () => decideLeave(b.dataset.approveLv, 'approved', b));
 }
+
+/* ---- allocate leave to a staff member ---- */
+function fillAllocStaff() {
+  const keep = $('#alStaff').value;
+  const list = users.filter(u => u.deptId === S.deptId && u.status === 'active').sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  $('#alStaff').innerHTML = '<option value="">Choose…</option>' + list.map(u => `<option value="${u.id}">${esc(u.name)} (${esc(u.staffId || '')})</option>`).join('');
+  if (keep && list.some(u => u.id === keep)) $('#alStaff').value = keep;
+  allocInfo();
+}
+function allocInfo() {
+  const u = users.find(x => x.id === $('#alStaff').value);
+  const ent = u ? (u.alEntitlement ?? self.DEFAULT_AL_DAYS ?? 30) : 0, left = u ? ent - (u.alTaken || 0) : 0;
+  $('#alBal').textContent = u ? `${left} of ${ent} days left this year` : '';
+  const days = dateRange($('#alFrom').value, $('#alTo').value);
+  if (!days.length) { $('#alInfo').innerHTML = $('#alFrom').value ? '<span style="color:var(--bad)">End date must be on or after the start date.</span>' : ''; return; }
+  const clash = u && leaves.find(l => l.uid === u.id && ['approved', 'pending'].includes(l.status) && l.fromDate <= days.at(-1) && l.toDate >= days[0]);
+  $('#alInfo').innerHTML = `<strong>${plural(days.length, 'day')}</strong>`
+    + (u && $('#alCount').checked && days.length > left ? ` · <span style="color:var(--bad)">more than their ${left} days left</span>` : '')
+    + (clash ? `<div style="color:var(--bad)">They already have ${clash.status === 'pending' ? 'a request' : 'leave'} ${fmtShort(clash.fromDate)} – ${fmtShort(clash.toDate)}.</div>` : '');
+}
+['alStaff', 'alFrom', 'alTo', 'alCount'].forEach(id => $('#' + id).addEventListener('change', () => { if (id === 'alFrom' && $('#alTo').value < $('#alFrom').value) $('#alTo').value = $('#alFrom').value; allocInfo(); if (id !== 'alStaff' && id !== 'alCount') drawCal(); }));
+$('#allocForm').onsubmit = async e => {
+  e.preventDefault();
+  const u = users.find(x => x.id === $('#alStaff').value); if (!u) return toast('Choose a staff member.', 'bad');
+  const from = $('#alFrom').value, to = $('#alTo').value, n = dateRange(from, to).length;
+  if (!n) return toast('Check the dates.', 'bad');
+  if (!confirm(`Allocate ${plural(n, 'day')} of annual leave to ${u.name} (${fmtShort(from)} – ${fmtShort(to)})?`)) return;
+  const b = $('#alSave'); busy(b, true, 'Saving…');
+  try {
+    await api('/api/staff', { action: 'allocate_leave', uid: u.id, from, to, note: $('#alNote').value.trim(), countsAgainst: $('#alCount').checked, notify: $('#alNotify').checked });
+    toast(`${plural(n, 'day')} of leave allocated to ${u.name}.`, 'ok');
+    $('#alNote').value = '';
+    calCache.clear(); await invalidate('leaveCalendar/', 'leave:', 'leaves:', 'users');
+    await freshly(() => Promise.all([loadLeaves(), loadUsers()]));
+    fillAllocStaff(); drawCal(); showOnLeave(from);
+  } catch (err) { toast(err.message, 'bad', 8000); }
+  busy(b, false);
+};
 $('#calPrev').onclick = () => { calView.setMonth(calView.getMonth() - 1); drawCal(); };
 $('#calNext').onclick = () => { calView.setMonth(calView.getMonth() + 1); drawCal(); };
 ['qFrom', 'qTo'].forEach(id => $('#' + id).onchange = drawCal);
@@ -325,7 +448,11 @@ $('#defForm').onsubmit = async e => {
   await setDoc(doc(db, 'leaveCalendar', calId(y)), { orgId: S.orgId, deptId: S.deptId, defaultQuota: v === '' ? deleteField() : Number(v) }, { merge: true });
   calCache.clear(); await invalidate('leaveCalendar/'); toast('Default saved.', 'ok'); drawCal();
 };
-loaders.calendar = () => { $('#qFrom').value = $('#qTo').value = today(); drawCal(); showOnLeave(today()); };
+loaders.calendar = async () => {
+  $('#qFrom').value = $('#qTo').value = $('#alFrom').value = $('#alTo').value = today();
+  if (!users.length) await loadUsers();
+  fillAllocStaff(); drawCal(); showOnLeave(today());
+};
 
 /* ============ ROSTER (one unit) ============ */
 loaders.roster = () => editor.load();
