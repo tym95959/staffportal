@@ -5,7 +5,7 @@
   <title>SL / FRL Report · Staff Portal</title>
   <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
   <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/style.css?v=20261024">
   <script src="/js/config.js"></script>
 </head>
 <body>
@@ -47,7 +47,7 @@
 </main>
 <script type="module">
   import { requireUser, db, $, $$, esc, fmtShort, fmtTs, pill, plural, today, dateRange, toast, busy, api, byNewest,
-    collection, doc, setDoc, getDocs, query, where, serverTimestamp, APP_NAME } from '/js/app.js';
+    collection, doc, setDoc, query, where, serverTimestamp, cachedDocs, freshly, APP_NAME } from '/js/app.js';
   document.title = `SL / FRL Report · ${APP_NAME}`;
   const { user, profile, org, dept } = await requireUser();
 
@@ -123,14 +123,13 @@
         toast('Your report is saved, but the email could not be sent: ' + err.message + ' — press "Try sending again".', 'bad', 10000);
         btn.dataset.label = 'Try sending again';
       }
-      loadHistory();
+      freshly(loadHistory);
     } catch (err) { toast(err.message, 'bad'); }
     busy(btn, false);
   };
 
   async function loadHistory() {
-    const s = await getDocs(query(collection(db, 'reports'), where('uid', '==', user.uid)));
-    const list = s.docs.map(d => d.data()).sort(byNewest);
+    const list = (await cachedDocs('myReports', query(collection(db, 'reports'), where('uid', '==', user.uid)))).sort(byNewest);
     $('#history').innerHTML = list.length ? list.map(r => `<div class="list-item"><div>
         <strong>${r.type}</strong> · ${fmtShort(r.fromDate)} – ${fmtShort(r.toDate)} <span class="muted small">(${plural(r.days, 'day')})</span>
         <div class="small muted">${esc(r.reason)}</div>

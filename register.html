@@ -5,7 +5,7 @@
   <title>Register · Staff Portal</title>
   <link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#2563eb">
   <link rel="icon" href="/icons/icon-192.png"><link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/style.css?v=20261024">
   <script src="/js/config.js"></script>
 </head>
 <body>
@@ -14,7 +14,7 @@
     <div class="brand"><span class="mark">SP</span><span class="app-name">Staff Portal</span></div>
     <div>
       <h2>Create your staff account.</h2>
-      <p>Enter the company code you received from your HR or manager, choose your department, then fill in your details. Your company or department admin approves your account.</p>
+      <p>Enter the company code you received from your HR or manager, choose your unit, then fill in your details. Your company or unit admin approves your account.</p>
     </div>
     <p class="small">Use your Staff ID exactly as it appears on the duty roster.</p>
   </section>
@@ -35,7 +35,7 @@
 
         <form id="regForm" hidden>
           <div class="banner" id="company" style="margin-bottom:14px"></div>
-          <div class="field"><label for="dept">Department</label><select id="dept" required></select></div>
+          <div class="field"><label for="dept">Unit</label><select id="dept" required></select></div>
           <div class="row">
             <div class="field"><label for="name">Full name</label><input id="name" required autocomplete="name"></div>
             <div class="field"><label for="staffId">Staff ID</label><input id="staffId" required></div>
@@ -79,9 +79,9 @@
       if (!s.exists() || s.data().active === false) { toast('No company found with that code. Check it and try again.', 'bad'); return; }
       company = { code, ...s.data() };
       const depts = (company.departments || []).filter(d => d.active !== false).sort((a, b) => a.name.localeCompare(b.name));
-      if (!depts.length) { toast('This company has no departments set up yet. Please contact your admin.', 'bad'); return; }
+      if (!depts.length) { toast('This company has no units set up yet. Please contact your admin.', 'bad'); return; }
       $('#company').innerHTML = `Registering with <strong>${esc(company.orgName)}</strong>`;
-      $('#dept').innerHTML = (depts.length > 1 ? '<option value="">Choose your department…</option>' : '') + depts.map(d => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('');
+      $('#dept').innerHTML = (depts.length > 1 ? '<option value="">Choose your unit…</option>' : '') + depts.map(d => `<option value="${esc(d.id)}">${esc(d.name)}</option>`).join('');
       $('#codeForm').hidden = true; $('#regForm').hidden = false; $('#dept').focus();
     } catch (err) { toast(err.message, 'bad'); }
     finally { busy(b, false); }
@@ -93,7 +93,7 @@
   $('#regForm').onsubmit = async e => {
     e.preventDefault();
     if ($('#pw').value !== $('#pw2').value) return toast('Passwords do not match.', 'bad');
-    const deptId = $('#dept').value; if (!deptId) return toast('Choose your department.', 'bad');
+    const deptId = $('#dept').value; if (!deptId) return toast('Choose your unit.', 'bad');
     const b = $('#regBtn'); busy(b, true, 'Creating account…');
     try {
       const v = id => $('#' + id).value.trim();
