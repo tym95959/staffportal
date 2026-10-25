@@ -26,7 +26,7 @@ const brandOf = sc => sc.deptName ? `${sc.orgName} · ${sc.deptName}` : sc.orgNa
 /* ---------- SL / FRL report (confidential) ----------
    Full report + attachments  → only the designated SL or FRL recipients (company list + department list).
    Admins                     → a short notice without reason or attachments (if "email admins" is on).
-   If no designated recipients are set yet, the full report goes to the company/department admins instead,
+   If no designated recipients are set yet, the full report goes to the company/unit admins instead,
    so the certificate is never lost. */
 async function report(me, id, base, uploads) {
   const { ref, data: r } = await load('reports', id);
@@ -46,8 +46,8 @@ async function report(me, id, base, uploads) {
     subject: `[${r.type}] ${r.staffName} — ${period}`,
     html: emailHtml({
       base, brand: brandOf(sc), confidential: true, heading: `${label} report`,
-      intro: `${r.staffName} has reported ${label.toLowerCase()} through the staff portal.${fallback ? ` (No ${r.type} recipients are set for this company/department yet, so this was sent to the admins. Set them under Admin → Settings.)` : ''}`,
-      rows: [['Staff', `${r.staffName} (${r.staffId})`], ['Company', sc.orgName], ['Department', sc.deptName || r.deptName], ['Type', `${label} (${r.type})`],
+      intro: `${r.staffName} has reported ${label.toLowerCase()} through the staff portal.${fallback ? ` (No ${r.type} recipients are set for this company/unit yet, so this was sent to the admins. Set them under Admin → Settings.)` : ''}`,
+      rows: [['Staff', `${r.staffName} (${r.staffId})`], ['Company', sc.orgName], ['Unit', sc.deptName || r.deptName], ['Type', `${label} (${r.type})`],
         ['From', fmt(r.fromDate)], ['To', fmt(r.toDate)], ['Days', String(r.days)], ['Reason', r.reason],
         ['Attachments', files.length ? files.map(f => f.filename).join(', ') : expected ? 'Not included — ask the staff member to send them' : 'None'],
         ['Not attached (too large / wrong type)', rejected.join(', ')], ['Staff email', r.email]]
@@ -60,7 +60,7 @@ async function report(me, id, base, uploads) {
     html: emailHtml({
       base, brand: brandOf(sc), heading: `${r.type} reported`,
       intro: `${r.staffName} reported ${label.toLowerCase()}. The full report and any certificate were sent only to the designated ${r.type} recipients.`,
-      rows: [['Staff', `${r.staffName} (${r.staffId})`], ['Department', sc.deptName || r.deptName], ['Period', period], ['Days', String(r.days)]],
+      rows: [['Staff', `${r.staffName} (${r.staffId})`], ['Unit', sc.deptName || r.deptName], ['Period', period], ['Days', String(r.days)]],
       button: { label: 'Open in admin', link: '/admin.html#reports' }
     })
   });
@@ -81,7 +81,7 @@ async function swapRequest(me, id, base) {
     ? [['Date', fmt(w.requesterDate)], [`${w.requesterName}'s duty`, w.requesterShift || '—'], [`${w.targetName}'s duty`, w.targetShift || '—']]
     : [[`${w.requesterName} gives`, `${fmt(w.requesterDate)} — ${w.requesterShift || '—'}`], [`${w.targetName} gives`, `${fmt(w.targetDate)} — ${w.targetShift || '—'}`]];
   const rows = [['Requested by', `${w.requesterName} (${w.requesterStaffId})`], ['Requested with', `${w.targetName} (${w.targetStaffId})`],
-    ['Department', sc.deptName], ['Level', w.level], ...duties, ['Reason', w.reason]];
+    ['Unit', sc.deptName], ['Level', w.level], ...duties, ['Reason', w.reason]];
   const result = merge(
     await sendEmail({ to: [target?.email], fromName: sc.orgName, replyTo: me.email, subject: `Duty change request from ${w.requesterName}`,
       html: emailHtml({ base, brand: brandOf(sc), heading: 'Duty change request', intro: `${w.requesterName} has asked to change duty with you. Please accept or decline in the staff portal.`, rows, button: { label: 'Review request', link: '/swap.html' } }) }),
@@ -105,7 +105,7 @@ async function leaveRequest(me, id, base) {
     await sendEmail({ to: [...sc.recipients('leaveEmails'), ...sc.managerEmails()], privateList: true, fromName: sc.orgName, replyTo: l.email,
       subject: `[Annual leave request] ${l.staffName} — ${fmt(l.fromDate)} to ${fmt(l.toDate)}`,
       html: emailHtml({ base, brand: brandOf(sc), heading: 'Annual leave request', intro: `${l.staffName} has requested annual leave. It is waiting for approval.`,
-        rows: [['Staff', `${l.staffName} (${l.staffId})`], ['Department', sc.deptName], ['From', fmt(l.fromDate)], ['To', fmt(l.toDate)], ['Days', String(l.days)], ['Note', l.reason]],
+        rows: [['Staff', `${l.staffName} (${l.staffId})`], ['Unit', sc.deptName], ['From', fmt(l.fromDate)], ['To', fmt(l.toDate)], ['Days', String(l.days)], ['Note', l.reason]],
         button: { label: 'Approve or reject', link: '/admin.html#leave' } }) }),
     await pushAndInbox(sc.managerPush(), { base, title: `Leave request: ${l.staffName}`, body: `${fmt(l.fromDate)} → ${fmt(l.toDate)} (${plural(l.days, 'day')})`, link: '/admin.html#leave' })
   );
@@ -151,7 +151,13 @@ async function roster(me, body, base) {
   return merge(results);
 }
 
-/* ---------- new registration → tell that company/department's admins ---------- */
+/* ---------- new registration → tell that company/unit's admins ---------- */
+/* ---------- staff chose their own password → stop asking ---------- */
+async function passwordChanged(me) {
+  if (me.mustChangePassword) await db().doc(`users/${me.uid}`).update({ mustChangePassword: false, passwordChangedAt: FieldValue.serverTimestamp() });
+  return { ok: true };
+}
+
 async function registered(me, base) {
   if (me.status !== 'pending' || me.registrationNotified) return { skipped: true };
   const sc = await loadScope(me.orgId, me.deptId);
@@ -184,6 +190,7 @@ const handler = withAuth(async ({ me, body, base }) => {
     case 'leave_decision': return leaveDecision(me, body.id, base);
     case 'roster': return roster(me, body, base);
     case 'registered': return registered(me, base);
+    case 'password_changed': return passwordChanged(me);
     case 'test': return test(me, body, base);
     default: throw httpError(400, 'Unknown event');
   }
