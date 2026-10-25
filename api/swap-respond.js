@@ -16,7 +16,7 @@ export default withAuth(async ({ me, body, base }) => {
     if (!snap.exists) throw httpError(404, 'Request not found');
     w = snap.data();
     if (w.targetUid !== me.uid) throw httpError(403, 'This request was not sent to you');
-    if (w.orgId !== me.orgId || w.deptId !== me.deptId) throw httpError(403, 'You are no longer in this department');
+    if (w.orgId !== me.orgId || w.deptId !== me.deptId) throw httpError(403, 'You are no longer in this unit');
     if (w.status !== 'pending') throw httpError(409, `This request is already ${w.status}`);
     const update = { status: decision === 'accept' ? 'accepted' : 'rejected', respondedAt: FieldValue.serverTimestamp() };
 
@@ -50,7 +50,7 @@ export default withAuth(async ({ me, body, base }) => {
   const [sc, [requester]] = await Promise.all([loadScope(w.orgId, w.deptId), getUsers([w.requesterUid])]);
   const brand = sc.deptName ? `${sc.orgName} · ${sc.deptName}` : sc.orgName;
   const rows = [['Requested by', `${w.requesterName} (${w.requesterStaffId})`], ['Accepted by', accepted ? `${w.targetName} (${w.targetStaffId})` : ''],
-    ['Declined by', accepted ? '' : `${w.targetName} (${w.targetStaffId})`], ['Department', sc.deptName],
+    ['Declined by', accepted ? '' : `${w.targetName} (${w.targetStaffId})`], ['Unit', sc.deptName],
     ...(w.requesterDate === w.targetDate
       ? [['Date', fmt(w.requesterDate)], [`${w.requesterName} now works`, w.targetShift || '—'], [`${w.targetName} now works`, w.requesterShift || '—']]
       : [[`${w.targetName} works`, `${fmt(w.requesterDate)} — ${w.requesterShift || '—'}`], [`${w.requesterName} works`, `${fmt(w.targetDate)} — ${w.targetShift || '—'}`]]),
