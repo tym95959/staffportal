@@ -77,8 +77,14 @@ export function busy(btn, on, label = 'Please wait…') {
 export async function api(path, body) {
   const token = await auth.currentUser.getIdToken();
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
+  const text = await r.text();
+  let j = {}; try { j = JSON.parse(text); } catch {}
+  if (!r.ok) {
+    if (j.error) throw new Error(j.error);
+    // the function crashed before it could answer (e.g. a file missing on the server)
+    const hint = /FUNCTION_INVOCATION_FAILED|server error has occurred/i.test(text) ? ` — the server function ${path} crashed while starting. Check that every file in the api folder was uploaded, then see Vercel → Logs.` : '';
+    throw new Error(`Request failed (${r.status})${hint || (text ? ': ' + text.slice(0, 160) : '')}`);
+  }
   return j;
 }
 
