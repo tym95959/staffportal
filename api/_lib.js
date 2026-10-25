@@ -21,6 +21,7 @@ function adminApp() {
   return initializeApp({ credential: cert(sa) });
 }
 export const db = () => getFirestore(adminApp());
+export const adminAuth = () => getAuth(adminApp());
 
 /** Wraps a handler: POST only, verifies the Firebase ID token and loads the caller's profile. */
 export function withAuth(fn, { allowPending = false } = {}) {
